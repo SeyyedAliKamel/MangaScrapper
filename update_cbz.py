@@ -12,10 +12,9 @@ from manga_utils import (
     get_chapter_folder,
     download_chapter_images,
 )
+from providers import resolve_manga
 
-# Matches filenames like "One Piece_Chapter_1-65.cbz"
 CBZ_PATTERN = re.compile(r"^(?P<name>.+)_Chapter_(?P<first>[^-]+)-(?P<last>.+)\.cbz$")
-
 
 def find_combined_cbz():
     """Find the combined CBZ in OUTPUT_DIR matching the '<Name>_Chapter_X-Y.cbz' pattern."""
@@ -28,18 +27,16 @@ def find_combined_cbz():
             print(f"  - {c}")
     return max(candidates, key=os.path.getmtime)
 
-
 def parse_cbz_filename(path):
     match = CBZ_PATTERN.match(os.path.basename(path))
     if not match:
         return None, None, None
     return match.group("name"), match.group("first"), match.group("last")
 
-
 def get_chapters_in_cbz(cbz_path):
     """
     Returns the set of chapter numbers (as strings) already stored in the CBZ,
-    based on the 'Chapter_<num>/...' subfolder layout used by check.py.
+    based on the 'Chapter_<num>/...' subfolder layout.
     """
     chapters = set()
     with zipfile.ZipFile(cbz_path, "r") as zf:
@@ -49,7 +46,6 @@ def get_chapters_in_cbz(cbz_path):
                 chap_num = parts[0][len("Chapter_"):]
                 chapters.add(chap_num)
     return chapters
-
 
 def append_chapters_to_cbz(cbz_path, manga_name, new_chapters_with_folders, all_chapter_numbers):
     """
@@ -82,14 +78,12 @@ def append_chapters_to_cbz(cbz_path, manga_name, new_chapters_with_folders, all_
 
     os.remove(cbz_path)
     shutil.move(tmp_path, new_path)
-
     return new_path
-
 
 def main():
     combined_cbz = find_combined_cbz()
     if not combined_cbz:
-        print(f"No combined CBZ found in '{OUTPUT_DIR}'. Run check.py first to create one.")
+        print(f"No combined CBZ found in '{OUTPUT_DIR}'.")
         return
 
     manga_name, old_first, old_last = parse_cbz_filename(combined_cbz)
@@ -101,8 +95,18 @@ def main():
     print(f"  Manga name: {manga_name}")
     print(f"  Current range: {old_first}-{old_last}")
 
+    manga_id = MANGA_ID
+    if not manga_id or manga_id == "MangaIdHere":
+        print(f"Auto-resolving '{manga_name}' on MangaDex...")
+        _, details, _ = resolve_manga(manga_name, "mangadex")
+        if details:
+            manga_id = details.id
+            print(f"Resolved to ID: {manga_id}")
+        else:
+            manga_id = input("Could not auto-resolve. Enter MangaDex ID or URL: ").strip()
+
     print("\nFetching current chapter list from MangaDex...")
-    chap_num_to_id, all_chap_numbers = get_chapter_map(MANGA_ID)
+    chap_num_to_id, all_chap_numbers = get_chapter_map(manga_id)
 
     if not all_chap_numbers:
         print("No English chapters found for this manga.")
@@ -132,10 +136,12 @@ def main():
             failed[chap_num] = "no chapter number, skipped"
             continue
 
-        chap_id = chap_num_to_id[chap_num]
+        chap_id = chap_num_to_id.get(chap_num)
+        if not chap_id:
+            continue
         print(f"  Downloading Chapter {chap_num} ...")
         success, reason = download_chapter_images(chap_id, chap_num)
-        time.sleep(0.2)  # be nice to the API
+        time.sleep(0.2)
 
         if success:
             print("    Success.")
@@ -168,7 +174,6 @@ def main():
             print(f"  - Chapter {c}: {reason}")
 
     print("Done.")
-
 
 if __name__ == "__main__":
     main()

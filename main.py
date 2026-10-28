@@ -1,136 +1,129 @@
 import os
-import zipfile
+import sys
+import argparse
+import webbrowser
+import threading
+import time
+import uvicorn
 
-import img2pdf
-import requests
-from rich.progress import (
-    BarColumn,
-    MofNCompleteColumn,
-    Progress,
-    SpinnerColumn,
-    TaskProgressColumn,
-    TextColumn,
-    TimeElapsedColumn,
-    TimeRemainingColumn,
-)
+import config
+from providers import get_provider, search_providers, resolve_manga
+from core.downloader import download_manager
+from core.exporter import save_chapter_as_pdf, save_chapter_as_cbz, combine_chapters_into_cbz
+from core.converter import cbz_to_pdf, pdf_to_cbz
 
-from config import MANGA_ID, OUTPUT_DIR
-from manga_utils import fetch_chapter_list, download_image
+def run_web_server(host: str = "127.0.0.1", port: int = 8000, open_browser: bool = True):
+    url = f"http://{host}:{port}"
+    print(f"\n" + "=" * 60)
+    print(f"📖 MangaScrapper Pro - Web UI")
+    print(f"Server starting at: {url}")
+    print(f"=" * 60 + "\n")
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+    if open_browser:
+        def opener():
+            time.sleep(1.2)
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+        threading.Thread(target=opener, daemon=True).start()
 
+    from server.app import app
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
-def save_chapter_as_pdf(chapter_num, image_paths):
-    pdf_path = os.path.join(OUTPUT_DIR, f"Chapter_{chapter_num}.pdf")
-    with open(pdf_path, "wb") as f:
-        f.write(img2pdf.convert(image_paths, rotation=img2pdf.Rotation.ifvalid))
+def run_cli_mode(target: str, provider_name: str = "mangadex", limit_chapters: int = None):
+    print(f"Resolving '{target}' with provider '{provider_name}'...")
+    provider, details, chapters = resolve_manga(target, provider_name)
 
+    if not provider or not details:
+        print(f"Could not find manga for query: {target}")
+        return
 
-def save_chapter_as_cbz(chapter_num, image_paths):
-    cbz_path = os.path.join(OUTPUT_DIR, f"Chapter_{chapter_num}.cbz")
-    with zipfile.ZipFile(cbz_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for img_path in image_paths:
-            zf.write(img_path, arcname=os.path.basename(img_path))
+    print(f"\nFound: {details.title} (Source: {provider.display_name})")
+    print(f"Total chapters: {len(chapters)}")
 
+    if not chapters:
+        print("No chapters found.")
+        return
 
-def chapter_already_done(chap_num):
-    """Check if both the PDF and CBZ already exist for this chapter."""
-    pdf_path = os.path.join(OUTPUT_DIR, f"Chapter_{chap_num}.pdf")
-    cbz_path = os.path.join(OUTPUT_DIR, f"Chapter_{chap_num}.cbz")
-    return os.path.exists(pdf_path) and os.path.exists(cbz_path)
+    if limit_chapters:
+        chapters = chapters[:limit_chapters]
+        print(f"Downloading first {limit_chapters} chapters...")
 
-
-def make_progress():
-    return Progress(
-        SpinnerColumn(),
-        TextColumn("[bold cyan]{task.description:<22}"),
-        BarColumn(bar_width=40),
-        TaskProgressColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        TimeRemainingColumn(),
+    os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+    started = download_manager.start_download_job(
+        provider=provider,
+        manga_title=details.title,
+        manga_cover=details.cover_url,
+        chapters=chapters,
+        output_dir=config.OUTPUT_DIR,
+        save_cbz=True,
+        save_pdf=True,
+        save_images=False,
+        combine_cbz=True,
+        clean_temp=True,
     )
 
+    if not started:
+        print("A download job is already active.")
+        return
+
+    # Print progress to console
+    last_msg = ""
+    while True:
+        state = download_manager.get_state()
+        status = state["status"]
+        if state["logs"]:
+            latest = state["logs"][-1]["message"]
+            if latest != last_msg:
+                print(f"[{state['logs'][-1]['time']}] {latest}")
+                last_msg = latest
+
+        if status in ("completed", "cancelled", "error"):
+            print(f"\nDownload finished with status: {status.upper()}")
+            break
+        time.sleep(1)
 
 def main():
-    chapters = fetch_chapter_list(MANGA_ID)
+    parser = argparse.ArgumentParser(description="MangaScrapper Pro - Multi-source Manga Downloader & Reader")
+    parser.add_argument("--web", action="store_true", help="Launch the Web UI dashboard (default)")
+    parser.add_argument("--cli", action="store_true", help="Run in command-line mode")
+    parser.add_argument("--query", "-q", type=str, help="Manga title, keyword, or URL to download in CLI mode")
+    parser.add_argument("--provider", "-p", type=str, default="mangadex", help="Provider (mangadex, mangapill, comick, all)")
+    parser.add_argument("--id", type=str, help="Manga ID or URL")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Web UI host")
+    parser.add_argument("--port", type=int, default=8000, help="Web UI port")
+    parser.add_argument("--no-browser", action="store_true", help="Do not open browser automatically")
+    parser.add_argument("--convert", "-c", type=str, help="Convert a .cbz to .pdf or .pdf to .cbz directly")
 
-    with make_progress() as progress:
-        chapters_task = progress.add_task("Chapters", total=len(chapters))
-        pages_task = progress.add_task("Pages", total=1, visible=False)
+    args = parser.parse_args()
 
-        for chap in chapters:
-            chap_id = chap["id"]
-            chap_num = chap["attributes"]["chapter"] or "unknown"
+    if args.convert:
+        fpath = args.convert
+        if not os.path.isfile(fpath):
+            print(f"File not found: {fpath}")
+            return
+        ext = os.path.splitext(fpath)[1].lower()
+        if ext == ".cbz":
+            print(f"Converting CBZ -> PDF: {fpath} ...")
+            out = cbz_to_pdf(fpath)
+            print(f"Successfully created: {out}")
+        elif ext == ".pdf":
+            print(f"Converting PDF -> CBZ: {fpath} ...")
+            out = pdf_to_cbz(fpath)
+            print(f"Successfully created: {out}")
+        else:
+            print("Error: file must be a .cbz or .pdf file.")
+        return
 
-            # Skip fully-completed chapters (resume support)
-            if chapter_already_done(chap_num):
-                progress.console.print(f"[dim]Chapter {chap_num} already done, skipping.[/dim]")
-                progress.advance(chapters_task)
-                continue
-
-            progress.update(chapters_task, description=f"Chapters (Ch. {chap_num})")
-
-            # Get image server info for the chapter
-            server_resp = requests.get(f"https://api.mangadex.org/at-home/server/{chap_id}")
-            server_resp.raise_for_status()
-            server = server_resp.json()
-
-            base_url = server["baseUrl"]
-            chapter_hash = server["chapter"]["hash"]
-            filenames = server["chapter"]["data"]
-
-            chap_folder = os.path.join(OUTPUT_DIR, f"Chapter_{chap_num}")
-            os.makedirs(chap_folder, exist_ok=True)
-
-            # Reset the page bar for this chapter's page count
-            progress.reset(
-                pages_task,
-                total=len(filenames),
-                completed=0,
-                visible=True,
-                description=f"Pages (Ch. {chap_num})",
-            )
-
-            image_paths = []
-            failed = 0
-
-            for i, filename in enumerate(filenames, start=1):
-                image_url = f"{base_url}/data/{chapter_hash}/{filename}"
-                image_path = os.path.join(chap_folder, f"{i:03}.jpg")
-
-                if os.path.exists(image_path) and os.path.getsize(image_path) > 0:
-                    image_paths.append(image_path)
-                else:
-                    try:
-                        download_image(image_url, image_path)
-                        image_paths.append(image_path)
-                    except Exception as e:
-                        failed += 1
-                        progress.console.print(
-                            f"[red]  Ch. {chap_num} page {i} failed: {e}[/red]"
-                        )
-
-                progress.advance(pages_task)
-
-            # Convert images to PDF and CBZ
-            if image_paths:
-                progress.update(pages_task, description=f"Converting (Ch. {chap_num})")
-                save_chapter_as_pdf(chap_num, image_paths)
-                save_chapter_as_cbz(chap_num, image_paths)
-                msg = f"[green]✔ Chapter {chap_num} saved[/green]"
-                if failed:
-                    msg += f" [yellow]({failed} page(s) missing)[/yellow]"
-                progress.console.print(msg)
-            else:
-                progress.console.print(f"[red]✘ No images downloaded for Chapter {chap_num}[/red]")
-
-            progress.advance(chapters_task)
-
-        progress.update(pages_task, visible=False)
-
-    print("All done!")
-
+    # Determine mode: if CLI flag or query/id is explicitly provided, run CLI; otherwise default to Web UI
+    if args.cli or args.query or args.id:
+        target = args.query or args.id or config.MANGA_ID
+        if not target or target == "MangaIdHere":
+            target = input("Enter manga title, ID, or URL: ").strip()
+        run_cli_mode(target, provider_name=args.provider)
+    else:
+        run_web_server(host=args.host, port=args.port, open_browser=not args.no_browser)
 
 if __name__ == "__main__":
     main()

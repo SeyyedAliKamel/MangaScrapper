@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MangaScrapper Pro</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📖</text></svg>">
+</head>
+<body>
+    <header>
+        <div class="logo-area">
+            <div class="logo-icon">M</div>
+            <div class="logo-title">MangaScrapper Pro</div>
+        </div>
+        <nav class="nav-tabs">
+            <button class="tab-btn active" data-tab="tab-search">
+                <span>🔍</span> Search & Download
+            </button>
+            <button class="tab-btn" data-tab="tab-downloads">
+                <span>⚡</span> Active Downloads
+            </button>
+            <button class="tab-btn" data-tab="tab-library">
+                <span>📚</span> Library & Archives
+            </button>
+            <button class="tab-btn" data-tab="tab-converter">
+                <span>🔄</span> CBZ ⇄ PDF Converter
+            </button>
+            <button class="tab-btn" data-tab="tab-settings">
+                <span>⚙️</span> Settings
+            </button>
+        </nav>
+    </header>
+
+    <main>
+        <!-- TAB 1: SEARCH & DOWNLOAD -->
+        <section id="tab-search" class="tab-content active">
+            <div class="search-box-card">
+                <form id="search-form">
+                    <div class="search-bar-wrap">
+                        <input type="text" id="search-input" class="search-input" placeholder="Search by manga title (e.g. Chainsaw Man, One Piece) or paste a URL..." required autocomplete="off">
+                        <select id="search-provider" class="select-dropdown">
+                            <option value="all">🌐 All Sources</option>
+                        </select>
+                        <button type="submit" id="search-btn" class="btn-primary">Search</button>
+                    </div>
+                </form>
+                <div class="search-hint">
+                    💡 Tip: Paste a direct URL from MangaDex, MangaPill, or Comick to open and download it instantly without typing IDs.
+                </div>
+            </div>
+
+            <!-- Results Grid View -->
+            <div id="results-section">
+                <div id="results-grid" class="results-grid"></div>
+            </div>
+
+            <!-- Detail & Chapter Selector View -->
+            <div id="detail-view" class="detail-view">
+                <div style="margin-bottom: 1.25rem;">
+                    <button id="btn-back-to-results" class="btn-secondary">← Back to search results</button>
+                </div>
+                <div class="detail-header">
+                    <img id="detail-cover" class="detail-cover" src="" alt="Cover">
+                    <div class="detail-info">
+                        <div id="detail-title" class="detail-title">Manga Title</div>
+                        <div class="detail-meta-row">
+                            <span id="detail-provider" class="tag" style="font-weight:700;">PROVIDER</span>
+                            <span id="selected-count-badge" class="tag">0 selected</span>
+                        </div>
+                        <p id="detail-desc" class="detail-desc"></p>
+                    </div>
+                </div>
+
+                <!-- Export Options -->
+                <div class="export-options-box">
+                    <div class="options-title">Output Formats & Packaging</div>
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="opt-cbz" checked>
+                            <span>Per-Chapter CBZ (.cbz)</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="opt-pdf" checked>
+                            <span>Per-Chapter PDF (.pdf)</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="opt-images">
+                            <span>Keep Raw Image Folders</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="opt-combine" checked>
+                            <span>Combine Chapters into Single Archive (e.g. Name_Chapter_1-50.cbz)</span>
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="opt-clean-temp" checked>
+                            <span>Auto-clean folder artifacts after combining</span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Selection Toolbar -->
+                <div class="selection-toolbar">
+                    <div class="toolbar-buttons">
+                        <button type="button" id="btn-select-all" class="btn-secondary">Select All</button>
+                        <button type="button" id="btn-deselect-all" class="btn-secondary">Deselect All</button>
+                    </div>
+                    <div class="range-inputs">
+                        <span style="font-size:0.85rem;color:var(--text-muted);">Range:</span>
+                        <input type="number" id="range-from" class="range-input" placeholder="From" min="0" step="any">
+                        <span style="color:var(--text-muted);">-</span>
+                        <input type="number" id="range-to" class="range-input" placeholder="To" min="0" step="any">
+                        <button type="button" id="btn-apply-range" class="btn-secondary">Apply</button>
+                    </div>
+                </div>
+
+                <!-- Chapters List -->
+                <div id="chapters-grid" class="chapters-grid"></div>
+
+                <div style="display:flex; justify-content:flex-end;">
+                    <button id="btn-start-download" class="btn-primary" style="padding:1rem 2.5rem; font-size:1.05rem;" disabled>
+                        🚀 Start Download
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: ACTIVE DOWNLOADS -->
+        <section id="tab-downloads" class="tab-content">
+            <div class="progress-card">
+                <div class="progress-header">
+                    <div class="status-indicator">
+                        <div id="status-indicator-dot" class="status-dot"></div>
+                        <span id="status-indicator-text">IDLE</span>
+                    </div>
+                    <button id="btn-cancel-download" class="btn-secondary" style="border-color:var(--danger);color:var(--danger);" disabled>
+                        Cancel Job
+                    </button>
+                </div>
+
+                <div style="margin-bottom:1.5rem;">
+                    <div id="active-manga-title" style="font-size:1.35rem;font-weight:700;">No active task</div>
+                    <div id="active-manga-sub" style="font-size:0.88rem;color:var(--text-muted);margin-top:0.25rem;">Select a manga and chapters to begin downloading</div>
+                </div>
+
+                <!-- Chapters Progress -->
+                <div class="progress-bar-wrap">
+                    <div class="progress-bar-label">
+                        <span>Chapters Progress</span>
+                        <span id="chapters-progress-label">0 / 0 Chapters</span>
+                    </div>
+                    <div class="progress-bar-track">
+                        <div id="chapters-progress-fill" class="progress-bar-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Pages Progress -->
+                <div class="progress-bar-wrap">
+                    <div class="progress-bar-label">
+                        <span>Current Chapter Pages</span>
+                        <span id="pages-progress-label">0 / 0 Pages</span>
+                    </div>
+                    <div class="progress-bar-track">
+                        <div id="pages-progress-fill" class="progress-bar-fill"></div>
+                    </div>
+                </div>
+
+                <!-- Live Log Terminal -->
+                <div style="margin-top:1.5rem;">
+                    <div style="font-size:0.88rem;color:var(--text-muted);margin-bottom:0.5rem;font-weight:600;">Activity Logs</div>
+                    <div id="log-terminal" class="log-terminal">
+                        <div class="log-entry"><span class="log-time">[Ready]</span> <span class="log-info">MangaScrapper Pro is ready.</span></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 3: LIBRARY & ARCHIVES -->
+        <section id="tab-library" class="tab-content">
+            <div class="library-stats-row">
+                <div class="stat-card">
+                    <div class="stat-label">Combined CBZ Archives</div>
+                    <div id="stat-archives-count" class="stat-val">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Individual Chapter Files</div>
+                    <div id="stat-individual-count" class="stat-val">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Disk Storage Used</div>
+                    <div id="stat-total-size" class="stat-val">0 MB</div>
+                </div>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;background:var(--bg-secondary);padding:1rem 1.25rem;border-radius:var(--radius-md);border:1px solid var(--border-color);">
+                <div>
+                    <span style="font-size:0.85rem;color:var(--text-muted);">Output Folder: </span>
+                    <strong id="output-dir-path" style="font-size:0.9rem;word-break:break-all;"></strong>
+                </div>
+                <button id="btn-refresh-library" class="btn-secondary">🔄 Refresh</button>
+            </div>
+
+            <!-- Uncombined Folders Tool -->
+            <div id="uncombined-folders-section" style="display:none;margin-bottom:2rem;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:1.25rem;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+                    <div>
+                        <h3 style="font-size:1.05rem;">Uncombined Chapter Folders Detected</h3>
+                        <p style="font-size:0.82rem;color:var(--text-muted);">You have downloaded image folders that have not yet been packed into a combined CBZ archive.</p>
+                    </div>
+                    <button id="btn-combine-uncombined" class="btn-primary" style="font-size:0.85rem;padding:0.6rem 1.2rem;">📦 Pack into Single CBZ</button>
+                </div>
+                <div id="uncombined-list"></div>
+            </div>
+
+            <!-- Combined Archives List -->
+            <div style="margin-bottom:2rem;">
+                <h3 style="font-size:1.15rem;margin-bottom:1rem;">Combined Manga CBZ Archives</h3>
+                <div id="combined-archives-list"></div>
+            </div>
+
+            <!-- Individual Files List -->
+            <div style="margin-bottom:2rem;">
+                <h3 style="font-size:1.15rem;margin-bottom:1rem;">Individual Chapter Files (CBZ & PDF)</h3>
+                <div id="individual-files-list"></div>
+            </div>
+        </section>
+
+        <!-- TAB 4: CBZ <-> PDF CONVERTER -->
+        <section id="tab-converter" class="tab-content">
+            <div class="search-box-card" style="max-width:800px;margin-bottom:2rem;">
+                <h3 style="font-size:1.3rem;margin-bottom:0.5rem;">CBZ ⇄ PDF Converter</h3>
+                <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:1.5rem;">
+                    Upload any <strong>.cbz</strong> (Comic Book Zip) to convert it into a readable <strong>.pdf</strong>, or upload a <strong>.pdf</strong> to losslessly unpack its pages into a <strong>.cbz</strong> comic archive.
+                </p>
+
+                <div id="drop-zone" style="border:2px dashed var(--border-color);border-radius:var(--radius-md);padding:2.5rem 1.5rem;text-align:center;background:var(--bg-card);cursor:pointer;transition:border-color 0.2s;">
+                    <div style="font-size:2.5rem;margin-bottom:0.75rem;">📄 ⇄ 📦</div>
+                    <div style="font-weight:700;font-size:1.05rem;margin-bottom:0.25rem;">Drag & drop a .cbz or .pdf file here</div>
+                    <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem;">or click to browse from your device</div>
+                    <input type="file" id="converter-file-input" accept=".cbz,.pdf" style="display:none;">
+                    <button type="button" class="btn-secondary" onclick="document.getElementById('converter-file-input').click()">Browse File</button>
+                </div>
+
+                <div id="conversion-status" style="display:none;margin-top:1.5rem;padding:1rem;border-radius:var(--radius-md);background:var(--bg-input);">
+                    <div id="conversion-msg" style="font-size:0.9rem;display:flex;align-items:center;gap:0.6rem;"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 5: SETTINGS -->
+        <section id="tab-settings" class="tab-content">
+            <div class="search-box-card" style="max-width:700px;">
+                <h3 style="font-size:1.2rem;margin-bottom:1.25rem;">Application Settings</h3>
+                <form id="settings-form">
+                    <div style="margin-bottom:1.25rem;">
+                        <label style="display:block;font-size:0.88rem;color:var(--text-muted);margin-bottom:0.4rem;">Output Directory (where manga & archives are saved):</label>
+                        <input type="text" id="cfg-output-dir" class="search-input" style="width:100%;" required>
+                    </div>
+                    <button type="submit" class="btn-primary">Save Changes</button>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
