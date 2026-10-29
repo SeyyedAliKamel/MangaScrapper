@@ -1,3 +1,4 @@
+# FastAPI application with endpoints for failed page tracking, single-page retry, and chapter rebuilding
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import sys
@@ -29,6 +30,7 @@ from core.downloader import download_manager
 from core.library import scan_library, combine_existing_folders
 from core.exporter import sanitize_filename
 from core.converter import conversion_manager
+from core.reader import resolve_library_path, get_book_info, get_page_image
 
 app = FastAPI(title="MangaScrapper Pro", version="2.5")
 
@@ -66,6 +68,17 @@ class ConvertLibraryRequest(BaseModel):
 
 class ConfigUpdateRequest(BaseModel):
     output_dir: str
+
+class RetryPageRequest(BaseModel):
+    id: str
+
+class RetryChapterRequest(BaseModel):
+    chapter_num: str
+    series_title: Optional[str] = None
+
+class DismissFailedRequest(BaseModel):
+    id: Optional[str] = None
+    resolved_only: bool = False
 
 
 # ==========================================
@@ -204,7 +217,7 @@ def resolve_h(req: HResolveRequest):
 
 
 # ==========================================
-# 3. Downloads & Task Management
+# 3. Downloads, Task Management & Failed Pages
 # ==========================================
 @app.post("/api/download/start")
 def start_download(req: DownloadRequest):
@@ -261,6 +274,38 @@ def cancel_download():
 def get_download_status():
     return download_manager.get_state()
 
+@app.get("/api/download/failed")
+def get_failed_pages():
+    pages = download_manager.get_failed_pages()
+    active = [p for p in pages if p.get("status") in ("failed", "retrying")]
+    return {
+        "failed_pages": pages,
+        "total": len(active),
+        "resolved": len(pages) - len(active),
+    }
+
+@app.post("/api/download/retry-page")
+def retry_page(req: RetryPageRequest):
+    result = download_manager.retry_single_page(req.id)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Retry failed"))
+    return result
+
+@app.post("/api/download/retry-chapter")
+def retry_chapter(req: RetryChapterRequest):
+    return download_manager.retry_chapter(req.chapter_num, req.series_title)
+
+@app.post("/api/download/retry-all")
+def retry_all_failed():
+    return download_manager.retry_all_failed()
+
+@app.post("/api/download/dismiss-failed")
+def dismiss_failed(req: Optional[DismissFailedRequest] = None):
+    fid = req.id if req else None
+    resolved_only = req.resolved_only if req else False
+    download_manager.dismiss_failed(fid, resolved_only=resolved_only)
+    return {"status": "success"}
+
 
 # ==========================================
 # 4. Library & Archive Operations
@@ -284,11 +329,57 @@ def combine_folders(req: CombineRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def _checked_library_file(path: str) -> str:
+    try:
+        return resolve_library_path(path, config.OUTPUT_DIR)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 @app.get("/api/files/download")
 def download_file(path: str):
-    if not os.path.isfile(path):
-        raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(path, filename=os.path.basename(path))
+    real_path = _checked_library_file(path)
+    return FileResponse(real_path, filename=os.path.basename(real_path))
+
+@app.get("/api/files/view")
+def view_file_inline(path: str):
+    real_path = _checked_library_file(path)
+    ext = os.path.splitext(real_path)[1].lower()
+    media_type = "application/pdf" if ext == ".pdf" else "application/octet-stream"
+    return FileResponse(
+        real_path,
+        media_type=media_type,
+        headers={"Content-Disposition": f'inline; filename="{os.path.basename(real_path)}"'},
+    )
+
+@app.get("/api/reader/info")
+def reader_info(path: str):
+    real_path = _checked_library_file(path)
+    try:
+        info = get_book_info(real_path)
+        info["filename"] = os.path.basename(real_path)
+        info["filepath"] = real_path
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not open file: {e}")
+
+@app.get("/api/reader/page")
+def reader_page(path: str, index: int = Query(0, ge=0)):
+    real_path = _checked_library_file(path)
+    try:
+        data, mime = get_page_image(real_path, index)
+        return Response(
+            content=data,
+            media_type=mime,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
+    except IndexError:
+        raise HTTPException(status_code=404, detail="Page out of range")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not render page: {e}")
 
 
 # ==========================================
@@ -314,16 +405,11 @@ async def start_convert_upload(file: UploadFile = File(...)):
 
 @app.post("/api/convert/start-library")
 def start_convert_library(req: ConvertLibraryRequest):
-    if not os.path.isfile(req.filepath):
-        raise HTTPException(status_code=404, detail="File not found in library")
-
-    ext = os.path.splitext(req.filepath)[1].lower()
-    if ext not in (".cbz", ".pdf"):
-        raise HTTPException(status_code=400, detail="Only .cbz and .pdf files can be converted")
-
+    real_path = _checked_library_file(req.filepath)
+    ext = os.path.splitext(real_path)[1].lower()
     target_format = "pdf" if ext == ".cbz" else "cbz"
-    job_id = conversion_manager.start_job(req.filepath, target_format)
-    return {"job_id": job_id, "filename": os.path.basename(req.filepath), "target_format": target_format.upper()}
+    job_id = conversion_manager.start_job(real_path, target_format)
+    return {"job_id": job_id, "filename": os.path.basename(real_path), "target_format": target_format.upper()}
 
 @app.get("/api/convert/status/{job_id}")
 def get_conversion_status(job_id: str):

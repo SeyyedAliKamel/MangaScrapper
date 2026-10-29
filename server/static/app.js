@@ -1,7 +1,9 @@
-// State variables
+// Interactive frontend logic with real-time download monitoring, failed page recovery, and chapter filtering
 let currentManga = null;
 let currentChapters = [];
 let selectedChapterIds = new Set();
+let chapterSortAsc = true;
+let chapterFilterText = '';
 let downloadPollInterval = null;
 
 let currentHGallery = null;
@@ -9,6 +11,13 @@ let currentHChapters = [];
 
 let activeConversionJobId = null;
 let conversionPollInterval = null;
+
+let logFilterMode = 'all';
+let cachedLogs = [];
+let logClearMarker = null;
+let lastLogSignature = '';
+let lastFailedSignature = '';
+let lastDownloadStatus = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     initTabs();
@@ -19,19 +28,48 @@ document.addEventListener('DOMContentLoaded', () => {
     loadLibrary();
     initConverter();
     initHSearch();
+    initFailedRecoveryControls();
+    initLogControls();
+    initReader();
 
     // Manga Search form
-    document.getElementById('search-form').addEventListener('submit', (e) => {
-        e.preventDefault();
-        performMangaSearch();
-    });
+    const searchForm = document.getElementById('search-form');
+    if (searchForm) {
+        searchForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            performMangaSearch();
+        });
+    }
 
     // Manga Chapter selection buttons
-    document.getElementById('btn-select-all').addEventListener('click', selectAllChapters);
-    document.getElementById('btn-deselect-all').addEventListener('click', deselectAllChapters);
-    document.getElementById('btn-apply-range').addEventListener('click', applyChapterRange);
-    document.getElementById('btn-start-download').addEventListener('click', startMangaDownloadJob);
-    document.getElementById('btn-cancel-download').addEventListener('click', cancelDownloadJob);
+    const btnSelectAll = document.getElementById('btn-select-all');
+    if (btnSelectAll) btnSelectAll.addEventListener('click', selectAllChapters);
+
+    const btnDeselectAll = document.getElementById('btn-deselect-all');
+    if (btnDeselectAll) btnDeselectAll.addEventListener('click', deselectAllChapters);
+
+    const btnInvert = document.getElementById('btn-invert-selection');
+    if (btnInvert) btnInvert.addEventListener('click', invertChapterSelection);
+
+    const btnToggleSort = document.getElementById('btn-toggle-sort');
+    if (btnToggleSort) btnToggleSort.addEventListener('click', toggleChapterSort);
+
+    const filterInput = document.getElementById('filter-chapters-input');
+    if (filterInput) {
+        filterInput.addEventListener('input', (e) => {
+            chapterFilterText = e.target.value.trim().toLowerCase();
+            renderChaptersGrid();
+        });
+    }
+
+    const btnApplyRange = document.getElementById('btn-apply-range');
+    if (btnApplyRange) btnApplyRange.addEventListener('click', applyChapterRange);
+
+    const btnStartDownload = document.getElementById('btn-start-download');
+    if (btnStartDownload) btnStartDownload.addEventListener('click', startMangaDownloadJob);
+
+    const btnCancelDownload = document.getElementById('btn-cancel-download');
+    if (btnCancelDownload) btnCancelDownload.addEventListener('click', cancelDownloadJob);
 
     // Custom Naming inputs
     const customNameEl = document.getElementById('opt-custom-name');
@@ -40,9 +78,36 @@ document.addEventListener('DOMContentLoaded', () => {
     if (includeRangeEl) includeRangeEl.addEventListener('change', updateNamingPreview);
 
     // Library buttons
-    document.getElementById('btn-refresh-library').addEventListener('click', loadLibrary);
-    document.getElementById('settings-form').addEventListener('submit', saveConfig);
+    const btnRefreshLib = document.getElementById('btn-refresh-library');
+    if (btnRefreshLib) btnRefreshLib.addEventListener('click', loadLibrary);
+
+    const settingsForm = document.getElementById('settings-form');
+    if (settingsForm) settingsForm.addEventListener('submit', saveConfig);
 });
+
+// ==========================================
+// Toast Notification Utility
+// ==========================================
+function showToast(message, type = 'info', duration = 3800) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    let icon = 'ℹ️';
+    if (type === 'success') icon = '✅';
+    else if (type === 'error') icon = '❌';
+    else if (type === 'warning') icon = '⚠️';
+
+    toast.innerHTML = `<span>${icon}</span> <span>${escapeHtml(message)}</span>`;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(12px)';
+        setTimeout(() => toast.remove(), 320);
+    }, duration);
+}
 
 // ==========================================
 // 1. Navigation & Return Buttons
@@ -59,7 +124,6 @@ function initTabs() {
             const targetContent = document.getElementById(targetId);
             if (targetContent) targetContent.classList.add('active');
 
-            // Aura Theme transition animation when switching to H-Search
             if (targetId === 'tab-h-search') {
                 document.body.classList.add('theme-aura-dark');
             } else {
@@ -79,42 +143,50 @@ function switchTab(tabId) {
 }
 
 function initReturnButtons() {
-    // Return from Manga Detail to Search Results
     const backToResults = () => {
         document.getElementById('detail-view').classList.remove('active');
         document.getElementById('results-section').style.display = 'block';
     };
-    document.getElementById('btn-back-to-results').addEventListener('click', backToResults);
-    document.getElementById('btn-bottom-back').addEventListener('click', backToResults);
 
-    // Return from H-Gallery Detail to Galleries Results
-    document.getElementById('btn-back-to-h-results').addEventListener('click', () => {
-        document.getElementById('h-detail-view').classList.remove('active');
-        document.getElementById('h-results-section').style.display = 'block';
-    });
+    const btnBack = document.getElementById('btn-back-to-results');
+    if (btnBack) btnBack.addEventListener('click', backToResults);
 
-    // Return from Active Downloads
-    document.getElementById('btn-return-from-downloads').addEventListener('click', () => {
-        switchTab('tab-search');
-    });
-    document.getElementById('btn-goto-library').addEventListener('click', () => {
-        switchTab('tab-library');
-    });
+    const btnBottomBack = document.getElementById('btn-bottom-back');
+    if (btnBottomBack) btnBottomBack.addEventListener('click', backToResults);
 
-    // Return from Library
-    document.getElementById('btn-return-library-to-search').addEventListener('click', () => {
-        switchTab('tab-search');
-    });
+    const btnBackH = document.getElementById('btn-back-to-h-results');
+    if (btnBackH) {
+        btnBackH.addEventListener('click', () => {
+            document.getElementById('h-detail-view').classList.remove('active');
+            document.getElementById('h-results-section').style.display = 'block';
+        });
+    }
 
-    // Return from Converter
-    document.getElementById('btn-return-converter-to-search').addEventListener('click', () => {
-        switchTab('tab-search');
-    });
-    document.getElementById('btn-goto-library-from-conv').addEventListener('click', () => {
-        switchTab('tab-library');
-    });
+    const btnReturnDownloads = document.getElementById('btn-return-from-downloads');
+    if (btnReturnDownloads) {
+        btnReturnDownloads.addEventListener('click', () => switchTab('tab-search'));
+    }
+
+    const btnGotoLib = document.getElementById('btn-goto-library');
+    if (btnGotoLib) {
+        btnGotoLib.addEventListener('click', () => switchTab('tab-library'));
+    }
+
+    const btnReturnLib = document.getElementById('btn-return-library-to-search');
+    if (btnReturnLib) {
+        btnReturnLib.addEventListener('click', () => switchTab('tab-search'));
+    }
+
+    const btnReturnConv = document.getElementById('btn-return-converter-to-search');
+    if (btnReturnConv) {
+        btnReturnConv.addEventListener('click', () => switchTab('tab-search'));
+    }
+
+    const btnGotoLibConv = document.getElementById('btn-goto-library-from-conv');
+    if (btnGotoLibConv) {
+        btnGotoLibConv.addEventListener('click', () => switchTab('tab-library'));
+    }
 }
-
 
 // ==========================================
 // 2. Standard Manga Search & Chapter Selection
@@ -124,6 +196,8 @@ async function loadProviders() {
         const resp = await fetch('/api/providers');
         const data = await resp.json();
         const select = document.getElementById('search-provider');
+        if (!select) return;
+
         select.innerHTML = '<option value="all">🌐 All Manga Sources</option>';
         data.providers.forEach(p => {
             const opt = document.createElement('option');
@@ -143,11 +217,11 @@ async function performMangaSearch() {
 
     const btn = document.getElementById('search-btn');
     const originalText = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner"></span> Searching...';
+    btn.innerHTML = '<span>⏳</span> Searching...';
     btn.disabled = true;
 
     const resultsGrid = document.getElementById('results-grid');
-    resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">Searching manga sources...</div>';
+    resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2.5rem;">Searching manga sources...</div>';
     document.getElementById('results-section').style.display = 'block';
     document.getElementById('detail-view').classList.remove('active');
 
@@ -172,7 +246,7 @@ async function performMangaSearch() {
 
         resultsGrid.innerHTML = '';
         if (!data.results || data.results.length === 0) {
-            resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">No manga found. Try another query or paste a URL directly.</div>';
+            resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2.5rem;">No manga found. Try another query or paste a series URL directly.</div>';
             return;
         }
 
@@ -182,11 +256,11 @@ async function performMangaSearch() {
 
             const coverUrl = manga.cover_url || 'https://via.placeholder.com/240x360?text=No+Cover';
             card.innerHTML = `
-                <div class="manga-cover-wrap">
-                    <img src="${coverUrl}" class="manga-cover-img" alt="${escapeHtml(manga.title)}" onerror="this.src='https://via.placeholder.com/240x360?text=Cover+Not+Found'">
-                    <span class="provider-badge">${escapeHtml(manga.provider)}</span>
+                <div class="manga-card-cover-wrap">
+                    <img src="${coverUrl}" class="manga-card-cover" alt="${escapeHtml(manga.title)}" onerror="this.src='https://via.placeholder.com/240x360?text=Cover+Not+Found'">
+                    <span class="card-provider-pill">${escapeHtml(manga.provider)}</span>
                 </div>
-                <div class="manga-card-info">
+                <div class="manga-card-body">
                     <div class="manga-card-title" title="${escapeHtml(manga.title)}">${escapeHtml(manga.title)}</div>
                     <div class="manga-card-meta">
                         <span>${escapeHtml(manga.status || 'Manga')}</span>
@@ -199,7 +273,7 @@ async function performMangaSearch() {
         });
 
     } catch (err) {
-        resultsGrid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1;text-align:center;padding:2rem;">Error: ${escapeHtml(err.message)}</div>`;
+        resultsGrid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1;text-align:center;padding:2.5rem;">Error: ${escapeHtml(err.message)}</div>`;
     } finally {
         btn.innerHTML = originalText;
         btn.disabled = false;
@@ -215,20 +289,27 @@ async function loadMangaAndChapters(manga) {
     document.getElementById('detail-provider').textContent = manga.provider.toUpperCase();
     document.getElementById('detail-cover').src = manga.cover_url || 'https://via.placeholder.com/240x360?text=No+Cover';
     document.getElementById('detail-desc').textContent = manga.description || 'No description provided.';
-    document.getElementById('chapters-grid').innerHTML = '<div style="color:var(--text-muted);padding:1rem;">Fetching chapters...</div>';
+    document.getElementById('chapters-grid').innerHTML = '<div style="color:var(--text-muted);padding:1.5rem;">Fetching chapters...</div>';
     document.getElementById('selected-count-badge').textContent = 'Loading...';
 
     currentManga = manga;
     currentChapters = [];
     selectedChapterIds.clear();
 
+    const customNameEl = document.getElementById('opt-custom-name');
+    if (customNameEl) {
+        customNameEl.value = '';
+        customNameEl.placeholder = manga.title || 'Manga Title';
+    }
+
     try {
         const resp = await fetch(`/api/manga/${manga.provider}/${encodeURIComponent(manga.id)}/chapters`);
         const data = await resp.json();
         currentChapters = data.chapters || [];
         renderChaptersGrid();
+        updateNamingPreview();
     } catch (err) {
-        document.getElementById('chapters-grid').innerHTML = `<div style="color:var(--danger);padding:1rem;">Failed to load chapters: ${escapeHtml(err.message)}</div>`;
+        document.getElementById('chapters-grid').innerHTML = `<div style="color:var(--danger);padding:1.5rem;">Failed to load chapters: ${escapeHtml(err.message)}</div>`;
     }
 }
 
@@ -257,35 +338,60 @@ function showMangaDetails(manga, provider, chapters) {
     updateNamingPreview();
 }
 
+function parseChapterNum(c) {
+    const raw = (c && c.chapter_num) !== undefined ? String(c.chapter_num) : '0';
+    const num = parseFloat(raw);
+    return isNaN(num) ? 999999 : num;
+}
+
 function renderChaptersGrid() {
     const container = document.getElementById('chapters-grid');
+    if (!container) return;
     container.innerHTML = '';
 
     if (currentChapters.length === 0) {
-        container.innerHTML = '<div style="color:var(--text-muted);padding:1rem;">No chapters found.</div>';
+        container.innerHTML = '<div style="color:var(--text-muted);padding:1.5rem;">No chapters found.</div>';
         updateSelectionCount();
         return;
     }
 
-    currentChapters.forEach(chap => {
+    // Sort chapters
+    let chaptersToDisplay = [...currentChapters].sort((a, b) => {
+        const diff = parseChapterNum(a) - parseChapterNum(b);
+        return chapterSortAsc ? diff : -diff;
+    });
+
+    // Filter chapters
+    if (chapterFilterText) {
+        const visibleIds = new Set(getVisibleChapters().map(c => c.id));
+        chaptersToDisplay = chaptersToDisplay.filter(c => visibleIds.has(c.id));
+    }
+
+    if (chaptersToDisplay.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);padding:1.5rem;">No chapters match your filter.</div>';
+        updateSelectionCount();
+        return;
+    }
+
+    chaptersToDisplay.forEach(chap => {
+        const isSelected = selectedChapterIds.has(chap.id);
         const item = document.createElement('div');
-        item.className = 'chapter-item' + (selectedChapterIds.has(chap.id) ? ' selected' : '');
+        item.className = 'chapter-pill' + (isSelected ? ' selected' : '');
         item.innerHTML = `
-            <input type="checkbox" ${selectedChapterIds.has(chap.id) ? 'checked' : ''}>
-            <span style="font-weight:600;">Ch. ${escapeHtml(chap.chapter_num)}</span>
+            <span class="chapter-pill-num">Ch. ${escapeHtml(chap.chapter_num)}</span>
+            <span class="chapter-pill-title" title="${escapeHtml(chap.title || '')}">${escapeHtml(chap.title || '')}</span>
+            <span style="font-size:0.75rem;">${isSelected ? '✓' : ''}</span>
         `;
 
-        const chk = item.querySelector('input');
-        item.addEventListener('click', (e) => {
-            if (e.target !== chk) {
-                chk.checked = !chk.checked;
-            }
-            if (chk.checked) {
-                selectedChapterIds.add(chap.id);
-                item.classList.add('selected');
-            } else {
+        item.addEventListener('click', () => {
+            if (selectedChapterIds.has(chap.id)) {
                 selectedChapterIds.delete(chap.id);
                 item.classList.remove('selected');
+                item.querySelector('span:last-child').textContent = '';
+            } else {
+                selectedChapterIds.add(chap.id);
+                item.classList.add('selected');
+                item.querySelector('span:last-child').textContent = '✓';
             }
             updateSelectionCount();
         });
@@ -296,13 +402,46 @@ function renderChaptersGrid() {
     updateSelectionCount();
 }
 
+function getVisibleChapters() {
+    if (!chapterFilterText) return currentChapters;
+    return currentChapters.filter(c => {
+        const chapStr = String(c.chapter_num || '').toLowerCase();
+        const titleStr = String(c.title || '').toLowerCase();
+        return chapStr.includes(chapterFilterText) || titleStr.includes(chapterFilterText);
+    });
+}
+
 function selectAllChapters() {
-    currentChapters.forEach(c => selectedChapterIds.add(c.id));
+    getVisibleChapters().forEach(c => selectedChapterIds.add(c.id));
     renderChaptersGrid();
 }
 
 function deselectAllChapters() {
-    selectedChapterIds.clear();
+    if (chapterFilterText) {
+        getVisibleChapters().forEach(c => selectedChapterIds.delete(c.id));
+    } else {
+        selectedChapterIds.clear();
+    }
+    renderChaptersGrid();
+}
+
+function invertChapterSelection() {
+    getVisibleChapters().forEach(c => {
+        if (selectedChapterIds.has(c.id)) {
+            selectedChapterIds.delete(c.id);
+        } else {
+            selectedChapterIds.add(c.id);
+        }
+    });
+    renderChaptersGrid();
+}
+
+function toggleChapterSort() {
+    chapterSortAsc = !chapterSortAsc;
+    const btn = document.getElementById('btn-toggle-sort');
+    if (btn) {
+        btn.textContent = chapterSortAsc ? '⇅ Order: Low to High' : '⇅ Order: High to Low';
+    }
     renderChaptersGrid();
 }
 
@@ -311,7 +450,7 @@ function applyChapterRange() {
     const toVal = parseFloat(document.getElementById('range-to').value);
 
     if (isNaN(fromVal) || isNaN(toVal)) {
-        alert('Please specify valid numbers for range');
+        showToast('Please enter valid numbers for chapter range', 'warning');
         return;
     }
 
@@ -320,13 +459,14 @@ function applyChapterRange() {
 
     selectedChapterIds.clear();
     currentChapters.forEach(c => {
-        const num = parseFloat(c.chapter_num);
-        if (!isNaN(num) && num >= minVal && num <= maxVal) {
+        const num = parseChapterNum(c);
+        if (num >= minVal && num <= maxVal) {
             selectedChapterIds.add(c.id);
         }
     });
 
     renderChaptersGrid();
+    showToast(`Selected range ${minVal} - ${maxVal} (${selectedChapterIds.size} chapters)`, 'info');
 }
 
 function updateNamingPreview() {
@@ -345,7 +485,7 @@ function updateNamingPreview() {
     if (currentChapters && currentChapters.length > 0) {
         const selected = currentChapters.filter(c => selectedChapterIds.has(c.id));
         if (selected.length > 0) {
-            const nums = selected.map(c => parseFloat(c.chapter_num)).filter(n => !isNaN(n)).sort((a,b) => a - b);
+            const nums = selected.map(parseChapterNum).filter(n => n !== 999999).sort((a, b) => a - b);
             if (nums.length > 0) {
                 first = nums[0].toString();
                 last = nums[nums.length - 1].toString();
@@ -365,8 +505,18 @@ function updateNamingPreview() {
 
 function updateSelectionCount() {
     const badge = document.getElementById('selected-count-badge');
-    badge.textContent = `${selectedChapterIds.size} of ${currentChapters.length} selected`;
-    document.getElementById('btn-start-download').disabled = (selectedChapterIds.size === 0);
+    if (badge) {
+        badge.textContent = `${selectedChapterIds.size} of ${currentChapters.length} selected`;
+    }
+
+    const dlBtn = document.getElementById('btn-start-download');
+    const dlCountSpan = document.getElementById('btn-dl-count');
+    if (dlCountSpan) {
+        dlCountSpan.textContent = selectedChapterIds.size;
+    }
+    if (dlBtn) {
+        dlBtn.disabled = (selectedChapterIds.size === 0);
+    }
     updateNamingPreview();
 }
 
@@ -403,19 +553,19 @@ async function startMangaDownloadJob() {
 
         if (!resp.ok) {
             const err = await resp.json();
-            alert(`Error: ${err.detail || 'Could not start download'}`);
+            showToast(`Error: ${err.detail || 'Could not start download'}`, 'error');
             return;
         }
 
+        showToast(`Download started for ${selectedChapterIds.size} chapters!`, 'success');
         switchTab('tab-downloads');
     } catch (err) {
-        alert(`Failed: ${err.message}`);
+        showToast(`Failed to start: ${err.message}`, 'error');
     }
 }
 
-
 // ==========================================
-// 3. Dedicated H / Doujinshi Search (nhentai)
+// 3. Dedicated H / Doujinshi Search
 // ==========================================
 function initHSearch() {
     const form = document.getElementById('h-search-form');
@@ -427,7 +577,6 @@ function initHSearch() {
         if (query) performHSearch(query);
     });
 
-    // Quick tag pills
     document.querySelectorAll('.quick-tag-pill').forEach(pill => {
         pill.addEventListener('click', () => {
             const q = pill.dataset.query;
@@ -436,28 +585,31 @@ function initHSearch() {
         });
     });
 
-    // H-Download action buttons
-    document.getElementById('btn-h-download-cbz').addEventListener('click', () => startHDownload(true, false));
-    document.getElementById('btn-h-download-pdf').addEventListener('click', () => startHDownload(false, true));
-    document.getElementById('btn-h-download-both').addEventListener('click', () => startHDownload(true, true));
+    const btnCbz = document.getElementById('btn-h-download-cbz');
+    if (btnCbz) btnCbz.addEventListener('click', () => startHDownload(true, false));
+
+    const btnPdf = document.getElementById('btn-h-download-pdf');
+    if (btnPdf) btnPdf.addEventListener('click', () => startHDownload(false, true));
+
+    const btnBoth = document.getElementById('btn-h-download-both');
+    if (btnBoth) btnBoth.addEventListener('click', () => startHDownload(true, true));
 }
 
 async function performHSearch(query) {
     const btn = document.getElementById('h-search-btn');
     const originalText = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner"></span> Searching...';
+    btn.innerHTML = '<span>⏳</span> Searching...';
     btn.disabled = true;
 
     const providerSelect = document.getElementById('h-search-provider');
     const provider = providerSelect ? providerSelect.value : 'all';
 
     const resultsGrid = document.getElementById('h-results-grid');
-    resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">Searching doujin galleries...</div>';
+    resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2.5rem;">Searching galleries...</div>';
     document.getElementById('h-results-section').style.display = 'block';
     document.getElementById('h-detail-view').classList.remove('active');
 
     try {
-        // Direct ID or URL resolution
         if (/^\d{4,7}$/.test(query) || query.includes('nhentai.net') || query.includes('cin.wtf') || query.includes('cin.blue')) {
             const resolveResp = await fetch('/api/h/resolve', {
                 method: 'POST',
@@ -478,7 +630,7 @@ async function performHSearch(query) {
 
         resultsGrid.innerHTML = '';
         if (!data.results || data.results.length === 0) {
-            resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">No galleries found. Try another query or enter a 6-digit ID.</div>';
+            resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2.5rem;">No galleries found. Try another query or paste a 6-digit code.</div>';
             return;
         }
 
@@ -487,15 +639,14 @@ async function performHSearch(query) {
             card.className = 'manga-card';
 
             const coverUrl = gal.cover_url || 'https://via.placeholder.com/240x360?text=18+Gallery';
-            const badgeBg = gal.provider === 'cin' ? 'linear-gradient(135deg, #8b5cf6, #ec4899)' : 'linear-gradient(135deg, #ec4899, #f43f5e)';
             const provLabel = gal.provider ? gal.provider.toUpperCase() : '18+';
 
             card.innerHTML = `
-                <div class="manga-cover-wrap">
-                    <img src="${coverUrl}" class="manga-cover-img" alt="${escapeHtml(gal.title)}" onerror="this.src='https://via.placeholder.com/240x360?text=No+Cover'">
-                    <span class="provider-badge" style="background:${badgeBg};">${provLabel} #${escapeHtml(gal.id)}</span>
+                <div class="manga-card-cover-wrap">
+                    <img src="${coverUrl}" class="manga-card-cover" alt="${escapeHtml(gal.title)}" onerror="this.src='https://via.placeholder.com/240x360?text=No+Cover'">
+                    <span class="card-provider-pill">${provLabel} #${escapeHtml(gal.id)}</span>
                 </div>
-                <div class="manga-card-info">
+                <div class="manga-card-body">
                     <div class="manga-card-title" title="${escapeHtml(gal.title)}">${escapeHtml(gal.title)}</div>
                     <div class="manga-card-meta">
                         <span style="color:#ec4899;font-weight:600;">${provLabel}</span>
@@ -508,7 +659,7 @@ async function performHSearch(query) {
         });
 
     } catch (err) {
-        resultsGrid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1;text-align:center;padding:2rem;">Error: ${escapeHtml(err.message)}</div>`;
+        resultsGrid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1;text-align:center;padding:2.5rem;">Error: ${escapeHtml(err.message)}</div>`;
     } finally {
         btn.innerHTML = originalText;
         btn.disabled = false;
@@ -527,7 +678,7 @@ async function loadHGallery(gid, provider) {
             showHGalleryDetails(data.gallery, data.chapters, data.provider);
         }
     } catch (err) {
-        alert('Failed to load gallery: ' + err.message);
+        showToast('Failed to load gallery: ' + err.message, 'error');
     }
 }
 
@@ -591,27 +742,28 @@ async function startHDownload(saveCbz, savePdf) {
 
         if (!resp.ok) {
             const err = await resp.json();
-            alert(`Error: ${err.detail || 'Could not start download'}`);
+            showToast(`Error: ${err.detail || 'Could not start download'}`, 'error');
             return;
         }
 
+        showToast('Gallery download started!', 'success');
         switchTab('tab-downloads');
     } catch (err) {
-        alert(`Failed: ${err.message}`);
+        showToast(`Failed: ${err.message}`, 'error');
     }
 }
 
-
 // ==========================================
-// 4. Download Manager & Immediate Cancellation
+// 4. Download Status, Incomplete Pages & Logs
 // ==========================================
 async function cancelDownloadJob() {
     const btn = document.getElementById('btn-cancel-download');
-    btn.innerHTML = '<span class="spinner"></span> Cancelling...';
+    btn.innerHTML = '<span>⏳</span> Cancelling...';
     btn.disabled = true;
 
     try {
         await fetch('/api/download/cancel', { method: 'POST' });
+        showToast('Cancellation requested', 'warning');
         pollDownloadStatus();
     } catch (err) {
         console.error('Cancel request failed:', err);
@@ -620,10 +772,8 @@ async function cancelDownloadJob() {
 
 function startDownloadStatusPolling() {
     if (downloadPollInterval) clearInterval(downloadPollInterval);
-    downloadPollInterval = setInterval(pollDownloadStatus, 1000);
+    downloadPollInterval = setInterval(pollDownloadStatus, 1200);
 }
-
-let lastDownloadStatus = null;
 
 async function pollDownloadStatus() {
     try {
@@ -634,18 +784,20 @@ async function pollDownloadStatus() {
         if (!resp.ok) return;
         const state = await resp.json();
 
+        // Status Indicator
         const dot = document.getElementById('status-indicator-dot');
         const text = document.getElementById('status-indicator-text');
         dot.className = 'status-dot ' + (state.status || 'idle');
         text.textContent = (state.status || 'IDLE').toUpperCase();
 
+        // Hero Info
         const activeTitle = document.getElementById('active-manga-title');
         const activeSub = document.getElementById('active-manga-sub');
         const activeStage = document.getElementById('active-manga-stage');
 
         if (state.manga_title) {
             activeTitle.textContent = state.manga_title;
-            activeSub.textContent = `Provider: ${state.provider || 'Unknown'} | Total chapters: ${state.total_chapters}`;
+            activeSub.textContent = `Source: ${state.provider || 'Unknown'} | Chapters in queue: ${state.total_chapters}`;
         } else {
             activeTitle.textContent = 'No active task';
             activeSub.textContent = 'Select a manga or gallery to begin downloading';
@@ -669,7 +821,7 @@ async function pollDownloadStatus() {
         document.getElementById('chapters-progress-fill').style.width = `${chPercent}%`;
         let chLabel = `${state.completed_chapters} / ${state.total_chapters} Chapters`;
         if (state.status === 'completed' && state.total_chapters > 0) {
-            chLabel = `All ${state.total_chapters} Chapters Completed!`;
+            chLabel = `All ${state.total_chapters} Chapters Complete!`;
         } else if (state.current_chapter) {
             chLabel += ` (Ch. ${state.current_chapter})`;
         }
@@ -684,37 +836,33 @@ async function pollDownloadStatus() {
         }
         document.getElementById('pages-progress-label').textContent = pgLabel;
 
-        // Logs
-        const terminal = document.getElementById('log-terminal');
-        if (state.logs && state.logs.length > 0) {
-            terminal.innerHTML = state.logs.map(l => `
-                <div class="log-entry">
-                    <span class="log-time">[${l.time}]</span>
-                    <span class="log-${l.level}">${escapeHtml(l.message)}</span>
-                </div>
-            `).join('');
-            terminal.scrollTop = terminal.scrollHeight;
-        }
-
-        // If newly finished, refresh library tab so downloaded files appear immediately
-        if (lastDownloadStatus === 'running' && state.status === 'completed') {
-            loadLibrary();
-        }
-        lastDownloadStatus = state.status;
-
         // Cancel Button state
         const cancelBtn = document.getElementById('btn-cancel-download');
         if (state.status === 'running') {
             cancelBtn.disabled = false;
-            cancelBtn.innerHTML = '⏹ Cancel Download';
+            cancelBtn.innerHTML = '⏹ Cancel Task';
         } else {
             cancelBtn.disabled = true;
-            if (state.status === 'cancelled') {
-                cancelBtn.innerHTML = 'Cancelled';
+            cancelBtn.innerHTML = state.status === 'cancelled' ? 'Cancelled' : '⏹ Cancel Task';
+        }
+
+        // Render Incomplete & Failed Pages Section
+        renderFailedPagesSection(state.failed_pages || [], state.failed_count || 0, state.status);
+
+        // Logs
+        cachedLogs = state.logs || [];
+        renderLogs();
+
+        // Refresh library on completion
+        if (lastDownloadStatus === 'running' && state.status === 'completed') {
+            loadLibrary();
+            if (state.failed_count > 0) {
+                showToast(`Download finished with ${state.failed_count} missing page(s). Retry them below`, 'warning', 6000);
             } else {
-                cancelBtn.innerHTML = '⏹ Cancel Download';
+                showToast('Download finished successfully!', 'success');
             }
         }
+        lastDownloadStatus = state.status;
 
     } catch (err) {
         if (err.name !== 'AbortError') {
@@ -723,9 +871,299 @@ async function pollDownloadStatus() {
     }
 }
 
+// ==========================================
+// 5. Incomplete / Failed Pages UI & Retry Controls
+// ==========================================
+function initFailedRecoveryControls() {
+    const btnRetryAll = document.getElementById('btn-retry-all-failed');
+    if (btnRetryAll) {
+        btnRetryAll.addEventListener('click', async () => {
+            btnRetryAll.disabled = true;
+            btnRetryAll.innerHTML = '<span>⏳</span> Retrying All...';
+            try {
+                const resp = await fetch('/api/download/retry-all', { method: 'POST' });
+                const res = await resp.json();
+                if (!resp.ok) {
+                    showToast(`Retry failed: ${res.detail || 'Server error'}`, 'error');
+                } else if (res.total === 0) {
+                    showToast('No missing pages to recover', 'info');
+                } else if (res.failed === 0) {
+                    showToast(`Recovered ${res.succeeded} missing page(s)!`, 'success');
+                } else {
+                    showToast(`Retry finished (${res.succeeded} recovered, ${res.failed} still failing)`, 'warning');
+                }
+                pollDownloadStatus();
+            } catch (err) {
+                showToast(`Retry all failed: ${err.message}`, 'error');
+            } finally {
+                btnRetryAll.disabled = false;
+                btnRetryAll.innerHTML = '<span>🔄</span> Retry All Missing Pages';
+            }
+        });
+    }
+
+    const btnClearFailed = document.getElementById('btn-clear-failed');
+    if (btnClearFailed) {
+        btnClearFailed.addEventListener('click', async () => {
+            try {
+                await fetch('/api/download/dismiss-failed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ resolved_only: true })
+                });
+                showToast('Cleared recovered pages', 'info');
+                pollDownloadStatus();
+            } catch (err) {
+                console.error('Failed to dismiss:', err);
+            }
+        });
+    }
+}
+
+function renderFailedPagesSection(failedList, activeCount, status) {
+    const container = document.getElementById('failed-pages-container');
+    const noFailedNotice = document.getElementById('no-failed-notice');
+    const badgeNav = document.getElementById('nav-failed-badge');
+    const countSpan = document.getElementById('failed-pages-count');
+    const listContainer = document.getElementById('failed-pages-list');
+
+    // Update Nav Tab Badge
+    if (badgeNav) {
+        if (activeCount > 0) {
+            badgeNav.style.display = 'inline-block';
+            badgeNav.textContent = activeCount;
+        } else {
+            badgeNav.style.display = 'none';
+        }
+    }
+
+    if (!container || !listContainer) return;
+
+    if (failedList.length === 0) {
+        lastFailedSignature = '';
+        listContainer.innerHTML = '';
+        container.style.display = 'none';
+        if (status === 'completed') {
+            noFailedNotice.style.display = 'flex';
+        } else {
+            noFailedNotice.style.display = 'none';
+        }
+        return;
+    }
+
+    // We have failed/incomplete items to display
+    noFailedNotice.style.display = 'none';
+    container.style.display = 'block';
+    if (countSpan) countSpan.textContent = activeCount;
+
+    // Rebuilding the list on every poll would eat clicks, so only redraw when something changed
+    const signature = JSON.stringify(failedList.map(f => [f.id, f.status, f.error]));
+    if (signature === lastFailedSignature) return;
+    lastFailedSignature = signature;
+
+    listContainer.innerHTML = '';
+
+    failedList.forEach(item => {
+        const card = document.createElement('div');
+        const isResolved = (item.status === 'resolved');
+        const isRetrying = (item.status === 'retrying');
+
+        card.className = 'failed-card' + (isResolved ? ' resolved' : '');
+
+        card.innerHTML = `
+            <div>
+                <div class="failed-card-top">
+                    <span class="failed-chap-badge">Chapter ${escapeHtml(item.chapter_num)}</span>
+                    <span class="failed-page-badge">Page ${item.page_idx} of ${item.total_pages}</span>
+                </div>
+                <div class="failed-card-body" style="margin-top:0.6rem;">
+                    <div class="failed-series-name">${escapeHtml(item.series_title || 'Manga Series')}</div>
+                    ${!isResolved ? `<div class="failed-error-msg">⚠️ ${escapeHtml(item.error || 'Connection error')}</div>` : ''}
+                </div>
+            </div>
+            <div class="failed-card-actions">
+                ${isResolved ? `
+                    <span class="status-badge-resolved">✓ Repacked & Complete</span>
+                    <button type="button" class="btn-dismiss-failed" title="Dismiss" data-id="${escapeHtml(item.id)}">✕</button>
+                ` : `
+                    <div style="display:flex;gap:0.45rem;">
+                        <button type="button" class="btn-retry-page" data-id="${escapeHtml(item.id)}" ${isRetrying ? 'disabled' : ''}>
+                            ${isRetrying ? '⏳ Retrying...' : '🔄 Retry Page'}
+                        </button>
+                        <button type="button" class="btn-retry-chap" data-chap="${escapeHtml(item.chapter_num)}" data-title="${escapeHtml(item.series_title)}" ${isRetrying ? 'disabled' : ''}>
+                            ⚡ Retry Chapter
+                        </button>
+                    </div>
+                    <button type="button" class="btn-dismiss-failed" title="Dismiss" data-id="${escapeHtml(item.id)}">✕</button>
+                `}
+            </div>
+        `;
+
+        // Event Listeners for actions
+        const btnRetry = card.querySelector('.btn-retry-page');
+        if (btnRetry) {
+            btnRetry.addEventListener('click', () => retrySinglePage(item.id, btnRetry));
+        }
+
+        const btnChap = card.querySelector('.btn-retry-chap');
+        if (btnChap) {
+            btnChap.addEventListener('click', () => retryChapter(item.chapter_num, item.series_title, btnChap));
+        }
+
+        const btnDismiss = card.querySelector('.btn-dismiss-failed');
+        if (btnDismiss) {
+            btnDismiss.addEventListener('click', () => dismissSingleFailed(item.id));
+        }
+
+        listContainer.appendChild(card);
+    });
+}
+
+async function retrySinglePage(failedId, btnElement) {
+    if (btnElement) {
+        btnElement.disabled = true;
+        btnElement.innerHTML = '<span>⏳</span> Retrying...';
+    }
+
+    try {
+        const resp = await fetch('/api/download/retry-page', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: failedId })
+        });
+
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            showToast('Page recovered and archives updated!', 'success');
+        } else {
+            showToast(`Retry failed: ${data.detail || data.error || 'Server error'}`, 'error');
+        }
+        pollDownloadStatus();
+    } catch (err) {
+        showToast(`Failed: ${err.message}`, 'error');
+        pollDownloadStatus();
+    }
+}
+
+async function retryChapter(chapterNum, seriesTitle, btnElement) {
+    if (btnElement) {
+        btnElement.disabled = true;
+        btnElement.innerHTML = '<span>⏳</span> Retrying...';
+    }
+
+    try {
+        const resp = await fetch('/api/download/retry-chapter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chapter_num: String(chapterNum), series_title: seriesTitle })
+        });
+
+        const data = await resp.json();
+        if (!resp.ok) {
+            showToast(`Chapter retry failed: ${data.detail || 'Server error'}`, 'error');
+        } else if (!data.total) {
+            showToast(`Chapter ${chapterNum}: nothing left to retry`, 'info');
+        } else if (data.failed === 0) {
+            showToast(`Chapter ${chapterNum}: recovered ${data.succeeded} page(s)`, 'success');
+        } else {
+            showToast(`Chapter ${chapterNum}: ${data.succeeded} recovered, ${data.failed} still failing`, 'warning');
+        }
+        pollDownloadStatus();
+    } catch (err) {
+        showToast(`Failed: ${err.message}`, 'error');
+        pollDownloadStatus();
+    }
+}
+
+async function dismissSingleFailed(failedId) {
+    try {
+        await fetch('/api/download/dismiss-failed', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: failedId })
+        });
+        pollDownloadStatus();
+    } catch (err) {
+        console.error('Failed to dismiss:', err);
+    }
+}
 
 // ==========================================
-// 5. CBZ ⇄ PDF Converter (with Live Progress & Cancel)
+// 6. Log Terminal & Filter Controls
+// ==========================================
+function initLogControls() {
+    const btnAll = document.getElementById('btn-filter-logs-all');
+    const btnErr = document.getElementById('btn-filter-logs-errors');
+    const btnClear = document.getElementById('btn-clear-logs');
+
+    if (btnAll) {
+        btnAll.addEventListener('click', () => {
+            logFilterMode = 'all';
+            btnAll.classList.add('active');
+            if (btnErr) btnErr.classList.remove('active');
+            renderLogs();
+        });
+    }
+
+    if (btnErr) {
+        btnErr.addEventListener('click', () => {
+            logFilterMode = 'errors';
+            btnErr.classList.add('active');
+            if (btnAll) btnAll.classList.remove('active');
+            renderLogs();
+        });
+    }
+
+    if (btnClear) {
+        btnClear.addEventListener('click', () => {
+            // Remember the last visible entry so the next poll does not bring old logs back
+            const last = cachedLogs[cachedLogs.length - 1];
+            logClearMarker = last ? `${last.time}|${last.message}` : null;
+            lastLogSignature = '';
+            renderLogs();
+        });
+    }
+}
+
+function getVisibleLogs() {
+    let logs = cachedLogs;
+    if (logClearMarker) {
+        const idx = logs.map(l => `${l.time}|${l.message}`).lastIndexOf(logClearMarker);
+        if (idx >= 0) logs = logs.slice(idx + 1);
+    }
+    if (logFilterMode === 'errors') {
+        logs = logs.filter(l => l.level === 'error' || l.level === 'warning');
+    }
+    return logs;
+}
+
+function renderLogs() {
+    const terminal = document.getElementById('log-terminal');
+    if (!terminal) return;
+
+    const logsToRender = getVisibleLogs();
+    const signature = logFilterMode + '|' + logsToRender.map(l => `${l.time}|${l.message}`).join('\n');
+    if (signature === lastLogSignature) return;
+    lastLogSignature = signature;
+
+    if (logsToRender.length === 0) {
+        terminal.innerHTML = '<div class="log-entry" style="color:var(--text-dim);">No logs in this view.</div>';
+        return;
+    }
+
+    // Only auto-scroll when the user is already at the bottom
+    const nearBottom = terminal.scrollHeight - terminal.scrollTop - terminal.clientHeight < 40;
+    terminal.innerHTML = logsToRender.map(l => `
+        <div class="log-entry">
+            <span class="log-time">[${escapeHtml(l.time)}]</span>
+            <span class="log-${escapeHtml(l.level)}">${escapeHtml(l.message)}</span>
+        </div>
+    `).join('');
+    if (nearBottom) terminal.scrollTop = terminal.scrollHeight;
+}
+
+// ==========================================
+// 7. CBZ ⇄ PDF Converter (with Progress & Cancel)
 // ==========================================
 function initConverter() {
     const dropZone = document.getElementById('drop-zone');
@@ -765,17 +1203,19 @@ function initConverter() {
         }
     });
 
-    cancelBtn.addEventListener('click', () => {
-        if (activeConversionJobId) {
-            cancelActiveConversion(activeConversionJobId);
-        }
-    });
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', () => {
+            if (activeConversionJobId) {
+                cancelActiveConversion(activeConversionJobId);
+            }
+        });
+    }
 }
 
 async function uploadAndConvertFile(file) {
     const ext = file.name.split('.').pop().toLowerCase();
     if (ext !== 'cbz' && ext !== 'pdf') {
-        alert('Please choose a .cbz or .pdf file.');
+        showToast('Please select a .cbz or .pdf archive', 'warning');
         return;
     }
 
@@ -819,6 +1259,7 @@ async function uploadAndConvertFile(file) {
     } catch (err) {
         stageEl.textContent = 'Error: ' + err.message;
         cancelBtn.style.display = 'none';
+        showToast(`Conversion failed: ${err.message}`, 'error');
     }
 }
 
@@ -850,7 +1291,8 @@ function startConversionPolling(jobId) {
                 downloadBtn.href = dlUrl;
                 downloadBtn.style.display = 'inline-block';
 
-                // Trigger automatic download
+                showToast('Conversion completed! Starting download...', 'success');
+
                 const a = document.createElement('a');
                 a.style.display = 'none';
                 a.href = dlUrl;
@@ -869,6 +1311,7 @@ function startConversionPolling(jobId) {
                 activeConversionJobId = null;
                 cancelBtn.style.display = 'none';
                 stageEl.textContent = 'Conversion failed: ' + (job.error_message || 'Unknown error');
+                showToast('Conversion failed', 'error');
             }
 
         } catch (err) {
@@ -884,6 +1327,7 @@ async function cancelActiveConversion(jobId) {
 
     try {
         await fetch(`/api/convert/cancel/${jobId}`, { method: 'POST' });
+        showToast('Conversion cancelled', 'warning');
     } catch (err) {
         console.error('Cancel failed:', err);
     }
@@ -894,7 +1338,7 @@ async function convertLibraryFile(filepath) {
     const ext = filename.split('.').pop().toLowerCase();
     const targetFormat = (ext === 'cbz') ? 'PDF' : 'CBZ';
 
-    if (!confirm(`Convert '${filename}' into a .${targetFormat.toLowerCase()} file?`)) return;
+    if (!confirm(`Convert '${filename}' into a .${targetFormat.toLowerCase()} archive?`)) return;
 
     try {
         const resp = await fetch('/api/convert/start-library', {
@@ -920,13 +1364,12 @@ async function convertLibraryFile(filepath) {
         startConversionPolling(data.job_id);
 
     } catch (err) {
-        alert('Failed: ' + err.message);
+        showToast(`Failed: ${err.message}`, 'error');
     }
 }
 
-
 // ==========================================
-// 6. Library Management
+// 8. Library Management
 // ==========================================
 async function loadLibrary() {
     try {
@@ -942,31 +1385,34 @@ async function loadLibrary() {
         const archivesList = document.getElementById('combined-archives-list');
         archivesList.innerHTML = '';
         if (data.combined_archives.length === 0) {
-            archivesList.innerHTML = '<div style="color:var(--text-muted);padding:1rem;">No combined CBZ archives found.</div>';
+            archivesList.innerHTML = '<div style="color:var(--text-muted);padding:1.2rem;">No combined CBZ archives found.</div>';
         } else {
             data.combined_archives.forEach(arc => {
                 const card = document.createElement('div');
-                card.className = 'archive-card';
+                card.className = 'archive-item-card';
                 card.innerHTML = `
                     <div>
-                        <div class="archive-title">📦 ${escapeHtml(arc.filename)}</div>
-                        <div class="archive-meta">${arc.chapter_count} chapters (${arc.chapter_range}) • ${arc.size_mb} MB</div>
+                        <div class="archive-item-title">📦 ${escapeHtml(arc.filename)}</div>
+                        <div class="archive-item-meta">${arc.chapter_count} chapters (${arc.chapter_range}) • ${arc.size_mb} MB</div>
                     </div>
-                    <div style="display:flex;gap:0.5rem;align-items:center;">
-                        <button class="btn-secondary" onclick="convertLibraryFile('${escapeHtml(arc.filepath)}')">🔄 Convert to PDF</button>
+                    <div class="archive-actions">
+                        <button type="button" class="btn-primary btn-sm btn-read">📖 Read</button>
+                        <button type="button" class="btn-secondary btn-convert">🔄 Convert to PDF</button>
                         <a href="/api/files/download?path=${encodeURIComponent(arc.filepath)}" class="btn-secondary" download>⬇ Download</a>
                     </div>
                 `;
+                card.querySelector('.btn-read').addEventListener('click', () => openReader(arc.filepath, arc.filename));
+                card.querySelector('.btn-convert').addEventListener('click', () => convertLibraryFile(arc.filepath));
                 archivesList.appendChild(card);
             });
         }
 
-        // Individual Files (CBZ & PDF)
+        // Individual Files
         const individualList = document.getElementById('individual-files-list');
         if (individualList) {
             individualList.innerHTML = '';
             if (!data.individual_chapters || data.individual_chapters.length === 0) {
-                individualList.innerHTML = '<div style="color:var(--text-muted);padding:1rem;">No individual chapter files found.</div>';
+                individualList.innerHTML = '<div style="color:var(--text-muted);padding:1.2rem;">No individual chapter files found.</div>';
             } else {
                 data.individual_chapters.forEach(f => {
                     const isCbz = f.format === 'cbz';
@@ -974,26 +1420,29 @@ async function loadLibrary() {
                     const icon = isCbz ? '📦' : '📄';
 
                     const item = document.createElement('div');
-                    item.className = 'archive-card';
+                    item.className = 'archive-item-card';
                     item.innerHTML = `
                         <div>
-                            <div class="archive-title">${icon} ${escapeHtml(f.filename)}</div>
-                            <div class="archive-meta">
-                                ${f.series_name && f.series_name !== 'General' ? `<span class="tag" style="background:rgba(99,102,241,0.2);color:var(--accent-color);font-weight:600;margin-right:0.4rem;">${escapeHtml(f.series_name)}</span>` : ''}
+                            <div class="archive-item-title">${icon} ${escapeHtml(f.filename)}</div>
+                            <div class="archive-item-meta">
+                                ${f.series_name && f.series_name !== 'General' ? `<span class="tag tag-provider" style="margin-right:0.4rem;">${escapeHtml(f.series_name)}</span>` : ''}
                                 Chapter ${escapeHtml(f.chapter_num)}${f.chapter_title ? ' - ' + escapeHtml(f.chapter_title) : ''} • ${f.size_mb} MB • ${f.format.toUpperCase()}
                             </div>
                         </div>
-                        <div style="display:flex;gap:0.5rem;align-items:center;">
-                            <button class="btn-secondary" onclick="convertLibraryFile('${escapeHtml(f.filepath)}')">🔄 Convert to ${targetFormat}</button>
+                        <div class="archive-actions">
+                            <button type="button" class="btn-primary btn-sm btn-read">📖 Read</button>
+                            <button type="button" class="btn-secondary btn-convert">🔄 Convert to ${targetFormat}</button>
                             <a href="/api/files/download?path=${encodeURIComponent(f.filepath)}" class="btn-secondary" download>⬇ Download</a>
                         </div>
                     `;
+                    item.querySelector('.btn-read').addEventListener('click', () => openReader(f.filepath, f.filename));
+                    item.querySelector('.btn-convert').addEventListener('click', () => convertLibraryFile(f.filepath));
                     individualList.appendChild(item);
                 });
             }
         }
 
-        // Uncombined Folders (if any)
+        // Uncombined Folders
         const uncombinedBox = document.getElementById('uncombined-folders-section');
         const uncombinedList = document.getElementById('uncombined-list');
         uncombinedList.innerHTML = '';
@@ -1002,11 +1451,11 @@ async function loadLibrary() {
             uncombinedBox.style.display = 'block';
             data.uncombined_folders.forEach(f => {
                 const item = document.createElement('div');
-                item.className = 'archive-card';
+                item.className = 'archive-item-card';
                 item.innerHTML = `
                     <div>
-                        <div class="archive-title">📁 ${escapeHtml(f.folder_name)}</div>
-                        <div class="archive-meta">${f.image_count} images • ${f.size_mb} MB</div>
+                        <div class="archive-item-title">📁 ${escapeHtml(f.folder_name)}</div>
+                        <div class="archive-item-meta">${f.image_count} images • ${f.size_mb} MB</div>
                     </div>
                 `;
                 uncombinedList.appendChild(item);
@@ -1033,25 +1482,25 @@ async function combineUncombinedFolders() {
         });
         const res = await resp.json();
         if (resp.ok) {
-            alert(`Combined archive created: ${res.file}`);
+            showToast(`Combined archive created: ${res.file}`, 'success');
             loadLibrary();
         } else {
-            alert(`Error: ${res.detail}`);
+            showToast(`Error: ${res.detail}`, 'error');
         }
     } catch (err) {
-        alert(`Failed: ${err.message}`);
+        showToast(`Failed: ${err.message}`, 'error');
     }
 }
 
-
 // ==========================================
-// 7. Config / Settings
+// 9. Config / Settings
 // ==========================================
 async function loadConfig() {
     try {
         const resp = await fetch('/api/config');
         const data = await resp.json();
-        document.getElementById('cfg-output-dir').value = data.output_dir;
+        const input = document.getElementById('cfg-output-dir');
+        if (input) input.value = data.output_dir;
     } catch (err) {
         console.error('Config load failed:', err);
     }
@@ -1069,11 +1518,11 @@ async function saveConfig(e) {
             body: JSON.stringify({ output_dir: newDir })
         });
         if (resp.ok) {
-            alert('Settings saved!');
+            showToast('Settings saved successfully', 'success');
             loadLibrary();
         }
     } catch (err) {
-        alert(`Failed to save settings: ${err.message}`);
+        showToast(`Failed to save settings: ${err.message}`, 'error');
     }
 }
 
@@ -1084,4 +1533,364 @@ function escapeHtml(text) {
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+}
+
+// ==========================================
+// 10. Built-in PDF & CBZ Reader
+// ==========================================
+const readerState = {
+    open: false,
+    filepath: '',
+    filename: '',
+    format: 'pdf',
+    totalPages: 0,
+    page: 0,
+    chapters: [],
+    mode: 'single',      // 'single' | 'webtoon' | 'pdf-native'
+    rtl: false,          // false = LTR, true = RTL manga mode
+    fit: 'fit-height',   // 'fit-height' | 'fit-width' | 'fit-original'
+    zoom: 100,
+    observer: null,
+};
+
+function readerPageUrl(index) {
+    return `/api/reader/page?path=${encodeURIComponent(readerState.filepath)}&index=${index}`;
+}
+
+function initReader() {
+    const modal = document.getElementById('reader-modal');
+    if (!modal) return;
+
+    document.getElementById('reader-close-btn').addEventListener('click', closeReader);
+    document.getElementById('reader-prev-btn').addEventListener('click', () => stepReaderPage(-1));
+    document.getElementById('reader-next-btn').addEventListener('click', () => stepReaderPage(1));
+
+    // Left / right click zones inside single-page view respect LTR vs RTL reading direction
+    document.getElementById('reader-Zone-left').addEventListener('click', () => {
+        stepReaderPage(readerState.rtl ? 1 : -1);
+    });
+    document.getElementById('reader-Zone-right').addEventListener('click', () => {
+        stepReaderPage(readerState.rtl ? -1 : 1);
+    });
+
+    const slider = document.getElementById('reader-page-slider');
+    slider.addEventListener('input', (e) => {
+        goToReaderPage(parseInt(e.target.value, 10) - 1, true);
+    });
+
+    const pageInput = document.getElementById('reader-page-input');
+    pageInput.addEventListener('change', (e) => {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val)) {
+            goToReaderPage(val - 1, true);
+        }
+    });
+
+    const chapSelect = document.getElementById('reader-chapter-select');
+    chapSelect.addEventListener('change', (e) => {
+        const startIdx = parseInt(e.target.value, 10);
+        if (!isNaN(startIdx)) {
+            goToReaderPage(startIdx, true);
+        }
+    });
+
+    // Mode buttons
+    ['reader-mode-single', 'reader-mode-webtoon', 'reader-mode-native'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.addEventListener('click', () => setReaderMode(btn.dataset.mode));
+        }
+    });
+
+    // Direction toggle (LTR / RTL)
+    const dirBtn = document.getElementById('reader-dir-btn');
+    dirBtn.addEventListener('click', () => {
+        readerState.rtl = !readerState.rtl;
+        dirBtn.textContent = readerState.rtl ? '← RTL (Manga)' : 'LTR →';
+    });
+
+    // Fit mode cycle
+    const fitBtn = document.getElementById('reader-fit-btn');
+    const fits = [
+        { cls: 'fit-height', label: 'Fit Height' },
+        { cls: 'fit-width', label: 'Fit Width' },
+        { cls: 'fit-original', label: 'Original Size' },
+    ];
+    fitBtn.addEventListener('click', () => {
+        const idx = fits.findIndex(f => f.cls === readerState.fit);
+        const next = fits[(idx + 1) % fits.length];
+        readerState.fit = next.cls;
+        readerState.zoom = 100;
+        fitBtn.textContent = next.label;
+        applyReaderZoomAndFit();
+    });
+
+    // Zoom controls
+    document.getElementById('reader-zoom-in').addEventListener('click', () => {
+        readerState.zoom = Math.min(250, readerState.zoom + 15);
+        applyReaderZoomAndFit();
+    });
+    document.getElementById('reader-zoom-out').addEventListener('click', () => {
+        readerState.zoom = Math.max(50, readerState.zoom - 15);
+        applyReaderZoomAndFit();
+    });
+
+    // Fullscreen toggle
+    document.getElementById('reader-fullscreen-btn').addEventListener('click', () => {
+        if (!document.fullscreenElement) {
+            modal.requestFullscreen?.().catch(() => {});
+        } else {
+            document.exitFullscreen?.().catch(() => {});
+        }
+    });
+
+    // Keyboard shortcuts while reader is open
+    document.addEventListener('keydown', (e) => {
+        if (!readerState.open) return;
+        const tag = (e.target && e.target.tagName) || '';
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeReader();
+        } else if (e.key === 'ArrowRight') {
+            if (readerState.mode === 'single') {
+                e.preventDefault();
+                stepReaderPage(readerState.rtl ? -1 : 1);
+            }
+        } else if (e.key === 'ArrowLeft') {
+            if (readerState.mode === 'single') {
+                e.preventDefault();
+                stepReaderPage(readerState.rtl ? 1 : -1);
+            }
+        }
+    });
+}
+
+async function openReader(filepath, filename) {
+    try {
+        const resp = await fetch(`/api/reader/info?path=${encodeURIComponent(filepath)}`);
+        const data = await resp.json();
+        if (!resp.ok) {
+            showToast(`Could not open reader: ${data.detail || 'Error'}`, 'error');
+            return;
+        }
+        if (!data.pages || data.pages < 1) {
+            showToast('This file has no readable pages', 'warning');
+            return;
+        }
+
+        readerState.open = true;
+        readerState.filepath = data.filepath || filepath;
+        readerState.filename = data.filename || filename || 'Manga';
+        readerState.format = data.format || 'pdf';
+        readerState.totalPages = data.pages;
+        readerState.page = 0;
+        readerState.chapters = data.chapters || [];
+        readerState.zoom = 100;
+
+        document.getElementById('reader-book-title').textContent = readerState.filename;
+        document.getElementById('reader-format-badge').textContent = readerState.format.toUpperCase();
+        document.getElementById('reader-page-total').textContent = readerState.totalPages;
+
+        const slider = document.getElementById('reader-page-slider');
+        const pageInput = document.getElementById('reader-page-input');
+        slider.max = readerState.totalPages;
+        slider.value = 1;
+        pageInput.max = readerState.totalPages;
+        pageInput.value = 1;
+
+        // Populate chapter dropdown if archive has multiple chapters
+        const chapSelect = document.getElementById('reader-chapter-select');
+        chapSelect.innerHTML = '';
+        if (readerState.chapters.length > 1) {
+            readerState.chapters.forEach(ch => {
+                const opt = document.createElement('option');
+                opt.value = ch.start;
+                opt.textContent = `${ch.label} (p. ${ch.start + 1})`;
+                chapSelect.appendChild(opt);
+            });
+            chapSelect.style.display = 'inline-block';
+        } else {
+            chapSelect.style.display = 'none';
+        }
+
+        // Show Native PDF tab only when opening a .pdf file
+        const nativeBtn = document.getElementById('reader-mode-native');
+        if (nativeBtn) {
+            nativeBtn.style.display = readerState.format === 'pdf' ? 'inline-block' : 'none';
+        }
+
+        // Reset webtoon container for the newly opened book
+        document.getElementById('reader-webtoon-wrap').innerHTML = '';
+        document.getElementById('reader-pdf-frame').src = '';
+
+        const modal = document.getElementById('reader-modal');
+        modal.style.display = 'flex';
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.style.overflow = 'hidden';
+
+        setReaderMode('single');
+    } catch (err) {
+        showToast(`Failed to open reader: ${err.message}`, 'error');
+    }
+}
+
+function closeReader() {
+    readerState.open = false;
+    if (readerState.observer) {
+        readerState.observer.disconnect();
+        readerState.observer = null;
+    }
+    const modal = document.getElementById('reader-modal');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.setAttribute('aria-hidden', 'true');
+    }
+    document.getElementById('reader-pdf-frame').src = '';
+    document.getElementById('reader-webtoon-wrap').innerHTML = '';
+    document.body.style.overflow = '';
+    if (document.fullscreenElement) {
+        document.exitFullscreen?.().catch(() => {});
+    }
+}
+
+function setReaderMode(mode) {
+    if (mode === 'pdf-native' && readerState.format !== 'pdf') {
+        mode = 'single';
+    }
+    readerState.mode = mode;
+
+    ['reader-mode-single', 'reader-mode-webtoon', 'reader-mode-native'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+
+    const singleWrap = document.getElementById('reader-single-wrap');
+    const webtoonWrap = document.getElementById('reader-webtoon-wrap');
+    const pdfFrame = document.getElementById('reader-pdf-frame');
+    const bottomBar = document.getElementById('reader-bottombar');
+
+    singleWrap.style.display = mode === 'single' ? 'flex' : 'none';
+    webtoonWrap.style.display = mode === 'webtoon' ? 'flex' : 'none';
+    pdfFrame.style.display = mode === 'pdf-native' ? 'block' : 'none';
+    bottomBar.style.display = mode === 'pdf-native' ? 'none' : 'flex';
+
+    if (mode === 'single') {
+        goToReaderPage(readerState.page, false);
+    } else if (mode === 'webtoon') {
+        buildWebtoonStrip();
+        goToReaderPage(readerState.page, true);
+    } else if (mode === 'pdf-native') {
+        const viewUrl = `/api/files/view?path=${encodeURIComponent(readerState.filepath)}#page=${readerState.page + 1}`;
+        if (pdfFrame.src !== location.origin + viewUrl) {
+            pdfFrame.src = viewUrl;
+        }
+    }
+}
+
+function buildWebtoonStrip() {
+    const wrap = document.getElementById('reader-webtoon-wrap');
+    if (wrap.childElementCount === readerState.totalPages) return;
+    wrap.innerHTML = '';
+
+    if (readerState.observer) {
+        readerState.observer.disconnect();
+    }
+
+    const viewport = document.getElementById('reader-viewport');
+    readerState.observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const idx = parseInt(entry.target.dataset.index, 10);
+                if (!isNaN(idx) && readerState.mode === 'webtoon') {
+                    syncReaderCounters(idx);
+                }
+            }
+        });
+    }, { root: viewport, threshold: 0.45 });
+
+    for (let i = 0; i < readerState.totalPages; i++) {
+        const img = document.createElement('img');
+        img.className = 'reader-webtoon-page';
+        img.loading = 'lazy';
+        img.dataset.index = i;
+        img.alt = `Page ${i + 1}`;
+        img.src = readerPageUrl(i);
+        wrap.appendChild(img);
+        readerState.observer.observe(img);
+    }
+    applyReaderZoomAndFit();
+}
+
+function stepReaderPage(delta) {
+    goToReaderPage(readerState.page + delta, true);
+}
+
+function syncReaderCounters(index) {
+    readerState.page = index;
+    document.getElementById('reader-page-slider').value = index + 1;
+    document.getElementById('reader-page-input').value = index + 1;
+    document.getElementById('reader-prev-btn').disabled = index <= 0;
+    document.getElementById('reader-next-btn').disabled = index >= readerState.totalPages - 1;
+
+    // Keep chapter selector aligned with current page
+    const chapSelect = document.getElementById('reader-chapter-select');
+    if (readerState.chapters.length > 1 && chapSelect) {
+        let currentStart = readerState.chapters[0].start;
+        for (const ch of readerState.chapters) {
+            if (ch.start <= index) currentStart = ch.start;
+            else break;
+        }
+        chapSelect.value = String(currentStart);
+    }
+}
+
+function goToReaderPage(index, scrollWebtoon) {
+    if (!readerState.totalPages) return;
+    const clamped = Math.max(0, Math.min(readerState.totalPages - 1, index));
+    syncReaderCounters(clamped);
+
+    if (readerState.mode === 'single') {
+        const img = document.getElementById('reader-page-img');
+        img.src = readerPageUrl(clamped);
+        document.getElementById('reader-viewport').scrollTop = 0;
+
+        // Preload next two pages for instant page turns
+        for (let ahead = 1; ahead <= 2; ahead++) {
+            const nextIdx = clamped + ahead;
+            if (nextIdx < readerState.totalPages) {
+                const pre = new Image();
+                pre.src = readerPageUrl(nextIdx);
+            }
+        }
+    } else if (readerState.mode === 'webtoon' && scrollWebtoon) {
+        const targetImg = document.querySelector(`#reader-webtoon-wrap img[data-index="${clamped}"]`);
+        if (targetImg) {
+            targetImg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+}
+
+function applyReaderZoomAndFit() {
+    const label = document.getElementById('reader-zoom-label');
+    if (label) label.textContent = `${readerState.zoom}%`;
+
+    const img = document.getElementById('reader-page-img');
+    if (img) {
+        img.className = `reader-page-img ${readerState.fit}`;
+        if (readerState.zoom === 100) {
+            img.style.width = '';
+            img.style.maxWidth = '';
+            img.style.maxHeight = '';
+        } else {
+            img.style.maxWidth = 'none';
+            img.style.maxHeight = 'none';
+            img.style.width = `${readerState.zoom}vw`;
+        }
+    }
+
+    document.querySelectorAll('#reader-webtoon-wrap .reader-webtoon-page').forEach(el => {
+        el.style.width = readerState.zoom === 100 ? '' : `${Math.min(100, readerState.zoom)}vw`;
+    });
 }

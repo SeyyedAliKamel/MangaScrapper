@@ -1,6 +1,14 @@
+# Application entrypoint supporting Web UI and CLI modes with background download management
 import os
 os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+import socket
 import argparse
 import webbrowser
 import threading
@@ -20,7 +28,18 @@ from core.downloader import download_manager
 from core.exporter import save_chapter_as_pdf, save_chapter_as_cbz, combine_chapters_into_cbz
 from core.converter import cbz_to_pdf, pdf_to_cbz
 
+def find_available_port(host: str, start_port: int = 8000) -> int:
+    for p in [start_port, 8080, 8085, 8888, 5000]:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, p))
+                return p
+            except OSError:
+                continue
+    return start_port
+
 def run_web_server(host: str = "127.0.0.1", port: int = 8000, open_browser: bool = True):
+    port = find_available_port(host, port)
     url = f"http://{host}:{port}"
     print(f"\n" + "=" * 60)
     print(f"📖 MangaScrapper Pro - Web UI")
