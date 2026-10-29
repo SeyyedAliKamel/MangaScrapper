@@ -5,6 +5,7 @@ import zipfile
 from typing import List, Tuple, Optional
 import img2pdf
 from PIL import Image
+from providers.base import parse_chapter_number
 
 def sanitize_filename(name: str) -> str:
     """Strip characters that are problematic in filenames across OSes."""
@@ -139,19 +140,27 @@ def append_to_existing_cbz(
     cbz_path: str,
     manga_name: str,
     new_chapters: List[Tuple[str, List[str]]],
-    all_sorted_chap_nums: List[str],
-    output_dir: str
+    output_dir: Optional[str] = None,
+    all_sorted_chap_nums: Optional[List[str]] = None,
 ) -> str:
     """
     Append new chapters into an existing combined CBZ archive and rename with updated range.
     """
+    if not output_dir:
+        output_dir = os.path.dirname(cbz_path) or "."
+
+    # Discover existing chapters from the source CBZ before modification
+    existing_chaps = set(get_chapters_in_cbz(cbz_path))
     tmp_path = cbz_path + ".tmp"
+    incoming_chap_prefixes = {f"Chapter_{c}/" for c, _ in new_chapters}
+
     with zipfile.ZipFile(cbz_path, "r") as src_zf, \
          zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as dst_zf:
         
-        # Copy existing entries
+        # Copy existing entries, skipping any that are being re-added
         for item in src_zf.infolist():
-            dst_zf.writestr(item, src_zf.read(item.filename))
+            if not any(item.filename.startswith(pref) for pref in incoming_chap_prefixes):
+                dst_zf.writestr(item, src_zf.read(item.filename))
 
         # Add new chapters
         for chap_num, image_paths in new_chapters:
@@ -160,10 +169,26 @@ def append_to_existing_cbz(
                     arcname = f"Chapter_{chap_num}/{os.path.basename(img_path)}"
                     dst_zf.write(img_path, arcname=arcname)
 
-    first, last = all_sorted_chap_nums[0], all_sorted_chap_nums[-1]
+    if not all_sorted_chap_nums:
+        new_chaps = {c for c, _ in new_chapters}
+        combined = list(existing_chaps.union(new_chaps))
+        combined.sort(key=parse_chapter_number)
+        all_sorted_chap_nums = combined
+
+    first = all_sorted_chap_nums[0] if all_sorted_chap_nums else "1"
+    last = all_sorted_chap_nums[-1] if all_sorted_chap_nums else first
     safe_name = sanitize_filename(manga_name)
-    new_filename = f"{safe_name}_Chapter_{first}-{last}.cbz"
+
+    orig_name = os.path.basename(cbz_path)
+    if "_Chapter_" in orig_name:
+        new_filename = f"{safe_name}_Chapter_{first}-{last}.cbz"
+    else:
+        new_filename = orig_name
+
     new_path = os.path.join(output_dir, new_filename)
+
+    if os.path.abspath(cbz_path) != os.path.abspath(new_path) and os.path.exists(new_path):
+        os.remove(new_path)
 
     os.remove(cbz_path)
     shutil.move(tmp_path, new_path)

@@ -79,7 +79,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Library buttons
     const btnRefreshLib = document.getElementById('btn-refresh-library');
-    if (btnRefreshLib) btnRefreshLib.addEventListener('click', loadLibrary);
+    if (btnRefreshLib) btnRefreshLib.addEventListener('click', () => loadLibrary());
+
+    const btnCheckUpdates = document.getElementById('btn-check-library-updates');
+    if (btnCheckUpdates) btnCheckUpdates.addEventListener('click', () => checkLibraryUpdates(true));
+
+    const btnUpdateAll = document.getElementById('btn-update-all-series');
+    if (btnUpdateAll) btnUpdateAll.addEventListener('click', handleUpdateAllSeries);
+
+    const btnCloseModal = document.getElementById('btn-close-update-modal');
+    if (btnCloseModal) btnCloseModal.addEventListener('click', closeUpdateModal);
+
+    const btnCancelModal = document.getElementById('btn-cancel-update-modal');
+    if (btnCancelModal) btnCancelModal.addEventListener('click', closeUpdateModal);
+
+    const btnConfirmModal = document.getElementById('btn-confirm-update-modal');
+    if (btnConfirmModal) btnConfirmModal.addEventListener('click', executeModalUpdate);
 
     const settingsForm = document.getElementById('settings-form');
     if (settingsForm) settingsForm.addEventListener('submit', saveConfig);
@@ -1369,8 +1384,226 @@ async function convertLibraryFile(filepath) {
 }
 
 // ==========================================
-// 8. Library Management
+// 8. Library Management & Auto-Updater
 // ==========================================
+let libraryUpdatesCache = {};
+let currentModalUpdateTarget = null;
+
+async function checkLibraryUpdates(userTriggered = false) {
+    const btn = document.getElementById('btn-check-library-updates');
+    const origText = btn ? btn.innerHTML : '⚡ Check for Updates';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '🔄 Checking online...';
+    }
+
+    try {
+        const resp = await fetch('/api/library/check-updates');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        
+        libraryUpdatesCache = {};
+        let updateCount = 0;
+        let totalNewChaps = 0;
+
+        (data.updates || []).forEach(u => {
+            if (u.filepath) {
+                libraryUpdatesCache[u.filepath] = u;
+                if (u.has_updates && u.new_count > 0) {
+                    updateCount++;
+                    totalNewChaps += u.new_count;
+                }
+            }
+        });
+
+        // Update banner
+        const banner = document.getElementById('library-updates-banner');
+        const bannerText = document.getElementById('updates-banner-text');
+        if (banner) {
+            if (updateCount > 0) {
+                banner.style.display = 'block';
+                if (bannerText) {
+                    bannerText.textContent = `Found ${updateCount} series with updates available (${totalNewChaps} total new chapters online)!`;
+                }
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+
+        // Re-render library archives to show badges/buttons
+        await loadLibrary();
+
+        if (userTriggered) {
+            if (updateCount > 0) {
+                showToast(`🔥 Found updates for ${updateCount} series (${totalNewChaps} new chapters)!`, 'success');
+            } else {
+                showToast('✅ All library series are currently up-to-date!', 'info');
+            }
+        }
+    } catch (err) {
+        console.error('Failed to check library updates:', err);
+        if (userTriggered) {
+            showToast(`Update check failed: ${err.message}`, 'error');
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = origText;
+        }
+    }
+}
+
+function openUpdateModal(updateInfo) {
+    currentModalUpdateTarget = updateInfo;
+    const modal = document.getElementById('update-modal');
+    const titleEl = document.getElementById('update-modal-title');
+    const bodyEl = document.getElementById('update-modal-body');
+
+    if (!modal || !bodyEl) return;
+
+    if (titleEl) {
+        titleEl.textContent = `⚡ Update: ${updateInfo.manga_name}`;
+    }
+
+    const newChaps = updateInfo.new_chapters || [];
+    const firstNew = newChaps[0] ? newChaps[0].chapter_num : '?';
+    const lastNew = newChaps[newChaps.length - 1] ? newChaps[newChaps.length - 1].chapter_num : '?';
+
+    bodyEl.innerHTML = `
+        <div style="display:flex; gap:1.25rem; margin-bottom:1.35rem; align-items:flex-start;">
+            ${updateInfo.cover_url ? `<img src="/api/proxy/image?url=${encodeURIComponent(updateInfo.cover_url)}" style="width:78px; height:112px; object-fit:cover; border-radius:8px; border:1px solid #334155; box-shadow:0 4px 12px rgba(0,0,0,0.35); flex-shrink:0;">` : ''}
+            <div style="flex:1; min-width:0;">
+                <h4 style="margin:0 0 0.55rem 0; font-size:1.18rem; font-weight:700; color:#f8fafc; line-height:1.35;">${escapeHtml(updateInfo.manga_name)}</h4>
+                <div style="display:flex; flex-direction:column; gap:0.35rem; font-size:0.88rem;">
+                    <div style="color:#94a3b8;">Source: <strong style="color:#38bdf8;">${escapeHtml(updateInfo.provider_display || updateInfo.provider || 'Online')}</strong></div>
+                    <div style="color:#94a3b8;">Current Archive: <strong>${escapeHtml(updateInfo.existing_range)}</strong> <span style="color:#64748b;">(${updateInfo.existing_count} chapters)</span></div>
+                    <div style="color:#94a3b8;">Latest Online: <strong style="color:#4ade80;">Chapter ${escapeHtml(String(updateInfo.latest_online))}</strong></div>
+                </div>
+            </div>
+        </div>
+
+        <div style="background:linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(217, 119, 6, 0.05) 100%); border-radius:10px; padding:1rem 1.15rem; border:1px solid rgba(245, 158, 11, 0.35); margin-bottom:1.35rem;">
+            <div style="font-size:0.95rem; font-weight:700; color:#fbbf24; margin-bottom:0.35rem; display:flex; align-items:center; gap:0.4rem;">
+                🔥 ${updateInfo.new_count} New Chapters Available (Ch. ${escapeHtml(firstNew)} – ${escapeHtml(lastNew)})
+            </div>
+            <div style="font-size:0.84rem; color:#94a3b8; line-height:1.45;">
+                Downloaded chapters will be seamlessly appended into your existing combined archive without re-downloading previously saved pages.
+            </div>
+        </div>
+
+        <div style="margin-bottom:1.25rem;">
+            <label style="display:block; font-size:0.88rem; font-weight:600; color:#cbd5e1; margin-bottom:0.45rem;">
+                How many new chapters to download:
+            </label>
+            <select id="modal-update-count-select" class="search-input" style="width:100%; padding:0.65rem 0.85rem; background:#0f172a; border:1px solid #334155; color:#fff; border-radius:8px; font-size:0.9rem;">
+                <option value="all">All ${updateInfo.new_count} new chapters (Ch. ${escapeHtml(firstNew)} – Ch. ${escapeHtml(lastNew)})</option>
+                ${updateInfo.new_count > 1 ? '<option value="1">Next 1 chapter only</option>' : ''}
+                ${updateInfo.new_count > 5 ? '<option value="5">Next 5 chapters</option>' : ''}
+                ${updateInfo.new_count > 10 ? '<option value="10">Next 10 chapters</option>' : ''}
+                ${updateInfo.new_count > 25 ? '<option value="25">Next 25 chapters</option>' : ''}
+                ${updateInfo.new_count > 50 ? '<option value="50">Next 50 chapters</option>' : ''}
+            </select>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:0.65rem; background:rgba(15, 23, 42, 0.6); border:1px solid #334155; border-radius:8px; padding:0.85rem 1rem;">
+            <label style="display:flex; align-items:center; gap:0.65rem; font-size:0.86rem; color:#cbd5e1; cursor:pointer; user-select:none;">
+                <input type="checkbox" id="modal-update-save-pdf" style="accent-color:#f59e0b; width:16px; height:16px; cursor:pointer;">
+                Also save new chapters as individual PDF files
+            </label>
+            <label style="display:flex; align-items:center; gap:0.65rem; font-size:0.86rem; color:#cbd5e1; cursor:pointer; user-select:none;">
+                <input type="checkbox" id="modal-update-clean-temp" checked style="accent-color:#f59e0b; width:16px; height:16px; cursor:pointer;">
+                Clean temporary image folders after appending
+            </label>
+        </div>
+    `;
+
+    modal.style.display = 'flex';
+}
+
+function closeUpdateModal() {
+    const modal = document.getElementById('update-modal');
+    if (modal) modal.style.display = 'none';
+    currentModalUpdateTarget = null;
+}
+
+async function deleteLibraryFile(filepath, filename) {
+    const confirmed = window.confirm(`Delete "${filename}"?\n\nThis permanently removes the file from disk. This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+        const resp = await fetch(`/api/files/delete?path=${encodeURIComponent(filepath)}`, { method: 'DELETE' });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        showToast(`🗑️ Deleted: ${filename}`, 'success');
+        // Remove from update cache
+        delete libraryUpdatesCache[filepath];
+        loadLibrary();
+    } catch (err) {
+        showToast(`Failed to delete: ${err.message}`, 'error');
+    }
+}
+
+async function executeModalUpdate() {
+    if (!currentModalUpdateTarget) return;
+
+    const target = currentModalUpdateTarget;
+    const countSelect = document.getElementById('modal-update-count-select');
+    const savePdfEl = document.getElementById('modal-update-save-pdf');
+    const cleanTempEl = document.getElementById('modal-update-clean-temp');
+
+    let maxChapters = null;
+    if (countSelect && countSelect.value !== 'all') {
+        maxChapters = parseInt(countSelect.value, 10);
+    }
+
+    const payload = {
+        filepath: target.filepath,
+        manga_name: target.manga_name,
+        provider: target.provider,
+        max_chapters: maxChapters,
+        save_pdf: savePdfEl ? savePdfEl.checked : false,
+        clean_temp: cleanTempEl ? cleanTempEl.checked : true,
+    };
+
+    closeUpdateModal();
+
+    try {
+        const resp = await fetch('/api/library/update-archive', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        const resData = await resp.json();
+        if (!resp.ok) {
+            throw new Error(resData.detail || `HTTP ${resp.status}`);
+        }
+
+        if (resData.status === 'started') {
+            showToast(`🚀 Update started for ${target.manga_name} (${resData.queued_chapters} chapters)!`, 'success');
+            switchTab('tab-downloads');
+        } else {
+            showToast(resData.message || 'Archive is already up to date.', 'info');
+        }
+    } catch (err) {
+        showToast(`Failed to start update: ${err.message}`, 'error');
+    }
+}
+
+function handleUpdateAllSeries() {
+    const seriesWithUpdates = Object.values(libraryUpdatesCache).filter(u => u && u.has_updates && u.new_count > 0);
+    if (seriesWithUpdates.length === 0) {
+        showToast('No series have pending updates.', 'info');
+        return;
+    }
+
+    // Open update modal for the first one
+    openUpdateModal(seriesWithUpdates[0]);
+    if (seriesWithUpdates.length > 1) {
+        showToast(`Starting update for 1 of ${seriesWithUpdates.length} series.`, 'info');
+    }
+}
+
 async function loadLibrary() {
     try {
         const resp = await fetch('/api/library');
@@ -1388,21 +1621,38 @@ async function loadLibrary() {
             archivesList.innerHTML = '<div style="color:var(--text-muted);padding:1.2rem;">No combined CBZ archives found.</div>';
         } else {
             data.combined_archives.forEach(arc => {
+                const arcUpdate = libraryUpdatesCache[arc.filepath];
+                const hasUpdate = arcUpdate && arcUpdate.has_updates && arcUpdate.new_count > 0;
+
                 const card = document.createElement('div');
                 card.className = 'archive-item-card';
                 card.innerHTML = `
-                    <div>
-                        <div class="archive-item-title">📦 ${escapeHtml(arc.filename)}</div>
-                        <div class="archive-item-meta">${arc.chapter_count} chapters (${arc.chapter_range}) • ${arc.size_mb} MB</div>
+                    <div class="archive-item-info">
+                        <div class="archive-item-title">
+                            <span>📦 ${escapeHtml(arc.filename)}</span>
+                            ${hasUpdate ? `<span class="badge-update">🔥 +${arcUpdate.new_count} New Ch.</span>` : ''}
+                        </div>
+                        <div class="archive-item-meta">
+                            <span>${arc.chapter_count} chapters (${arc.chapter_range})</span>
+                            <span>•</span>
+                            <span>${arc.size_mb} MB</span>
+                            ${hasUpdate ? `<span style="color:#fbbf24; font-weight:600;">• Latest Online: Ch. ${escapeHtml(String(arcUpdate.latest_online))}</span>` : ''}
+                        </div>
                     </div>
                     <div class="archive-actions">
-                        <button type="button" class="btn-primary btn-sm btn-read">📖 Read</button>
+                        ${hasUpdate ? `<button type="button" class="btn-amber btn-update">⚡ Update (+${arcUpdate.new_count})</button>` : ''}
+                        <button type="button" class="btn-primary btn-read">📖 Read</button>
                         <button type="button" class="btn-secondary btn-convert">🔄 Convert to PDF</button>
                         <a href="/api/files/download?path=${encodeURIComponent(arc.filepath)}" class="btn-secondary" download>⬇ Download</a>
+                        <button type="button" class="btn-danger btn-delete">🗑️</button>
                     </div>
                 `;
+                if (hasUpdate) {
+                    card.querySelector('.btn-update').addEventListener('click', () => openUpdateModal(arcUpdate));
+                }
                 card.querySelector('.btn-read').addEventListener('click', () => openReader(arc.filepath, arc.filename));
                 card.querySelector('.btn-convert').addEventListener('click', () => convertLibraryFile(arc.filepath));
+                card.querySelector('.btn-delete').addEventListener('click', () => deleteLibraryFile(arc.filepath, arc.filename));
                 archivesList.appendChild(card);
             });
         }
@@ -1422,21 +1672,29 @@ async function loadLibrary() {
                     const item = document.createElement('div');
                     item.className = 'archive-item-card';
                     item.innerHTML = `
-                        <div>
-                            <div class="archive-item-title">${icon} ${escapeHtml(f.filename)}</div>
+                        <div class="archive-item-info">
+                            <div class="archive-item-title">
+                                <span>${icon} ${escapeHtml(f.filename)}</span>
+                            </div>
                             <div class="archive-item-meta">
-                                ${f.series_name && f.series_name !== 'General' ? `<span class="tag tag-provider" style="margin-right:0.4rem;">${escapeHtml(f.series_name)}</span>` : ''}
-                                Chapter ${escapeHtml(f.chapter_num)}${f.chapter_title ? ' - ' + escapeHtml(f.chapter_title) : ''} • ${f.size_mb} MB • ${f.format.toUpperCase()}
+                                ${f.series_name && f.series_name !== 'General' ? `<span class="tag tag-provider">${escapeHtml(f.series_name)}</span>` : ''}
+                                <span>Chapter ${escapeHtml(f.chapter_num)}${f.chapter_title ? ' - ' + escapeHtml(f.chapter_title) : ''}</span>
+                                <span>•</span>
+                                <span>${f.size_mb} MB</span>
+                                <span>•</span>
+                                <span>${f.format.toUpperCase()}</span>
                             </div>
                         </div>
                         <div class="archive-actions">
-                            <button type="button" class="btn-primary btn-sm btn-read">📖 Read</button>
+                            <button type="button" class="btn-primary btn-read">📖 Read</button>
                             <button type="button" class="btn-secondary btn-convert">🔄 Convert to ${targetFormat}</button>
                             <a href="/api/files/download?path=${encodeURIComponent(f.filepath)}" class="btn-secondary" download>⬇ Download</a>
+                            <button type="button" class="btn-danger btn-delete">🗑️</button>
                         </div>
                     `;
                     item.querySelector('.btn-read').addEventListener('click', () => openReader(f.filepath, f.filename));
                     item.querySelector('.btn-convert').addEventListener('click', () => convertLibraryFile(f.filepath));
+                    item.querySelector('.btn-delete').addEventListener('click', () => deleteLibraryFile(f.filepath, f.filename));
                     individualList.appendChild(item);
                 });
             }

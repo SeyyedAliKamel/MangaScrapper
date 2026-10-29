@@ -15,6 +15,7 @@ from core.exporter import (
     save_chapter_as_cbz,
     save_chapter_as_pdf,
     combine_chapters_into_cbz,
+    append_to_existing_cbz,
     sanitize_filename,
     format_chapter_filename,
 )
@@ -363,6 +364,7 @@ class DownloadManager:
         combine_cbz: bool = True,
         clean_temp: bool = True,
         page_concurrency: int = 4,
+        append_to_cbz: Optional[str] = None,
     ) -> bool:
         with self.lock:
             if self.status == "running":
@@ -395,6 +397,7 @@ class DownloadManager:
                 combine_cbz=combine_cbz,
                 clean_temp=clean_temp,
                 page_concurrency=page_concurrency,
+                append_to_cbz=append_to_cbz,
             )
 
         self.worker_thread = threading.Thread(target=run, daemon=True)
@@ -415,6 +418,7 @@ class DownloadManager:
         combine_cbz: bool,
         clean_temp: bool,
         page_concurrency: int,
+        append_to_cbz: Optional[str] = None,
     ):
         with self.lock:
             if not self.current_job_id:
@@ -638,26 +642,36 @@ class DownloadManager:
                     self.stage = "Download stopped by user."
                 return
 
-            if combine_cbz and chapters_with_images:
+            if (combine_cbz or append_to_cbz) and chapters_with_images:
                 with self.lock:
                     self.stage = f"Combining {len(chapters_with_images)} chapters into archive..."
-                self.log(f"Combining {len(chapters_with_images)} chapters into single CBZ archive...")
+                self.log(f"Processing {len(chapters_with_images)} chapters for archive...")
                 chapters_with_images.sort(key=lambda pair: parse_chapter_number(pair[0]))
                 try:
-                    combined_path = combine_chapters_into_cbz(
-                        manga_name=safe_series,
-                        chapters_with_images=chapters_with_images,
-                        output_dir=output_dir,
-                        include_range=include_range,
-                    )
-                    self.log(f"Combined CBZ created: {os.path.basename(combined_path)}", level="success")
+                    if append_to_cbz and os.path.isfile(append_to_cbz):
+                        self.log(f"Appending {len(chapters_with_images)} new chapters to {os.path.basename(append_to_cbz)}...")
+                        combined_path = append_to_existing_cbz(
+                            cbz_path=append_to_cbz,
+                            manga_name=safe_series,
+                            new_chapters=chapters_with_images,
+                            output_dir=output_dir,
+                        )
+                        self.log(f"Updated combined CBZ: {os.path.basename(combined_path)}", level="success")
+                    else:
+                        combined_path = combine_chapters_into_cbz(
+                            manga_name=safe_series,
+                            chapters_with_images=chapters_with_images,
+                            output_dir=output_dir,
+                            include_range=include_range,
+                        )
+                        self.log(f"Combined CBZ created: {os.path.basename(combined_path)}", level="success")
                     # Let page retries from this job patch the combined archive too
                     with self.failed_lock:
                         for f in self.failed_pages:
                             if f.get("job_id") == job_id:
                                 f["combined_path"] = os.path.abspath(combined_path)
                 except Exception as e:
-                    self.log(f"Failed to create combined CBZ: {e}", level="error")
+                    self.log(f"Failed to create/update combined CBZ: {e}", level="error")
 
             # Keep folders that still have missing pages so they can be retried later
             if clean_temp and not save_images and not self.cancel_requested:

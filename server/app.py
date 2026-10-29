@@ -31,6 +31,8 @@ from core.library import scan_library, combine_existing_folders
 from core.exporter import sanitize_filename
 from core.converter import conversion_manager
 from core.reader import resolve_library_path, get_book_info, get_page_image
+from core.updater import check_archive_updates, check_all_library_updates
+from core.updater import check_archive_updates, check_all_library_updates
 
 app = FastAPI(title="MangaScrapper Pro", version="2.5")
 
@@ -62,6 +64,17 @@ class DownloadRequest(BaseModel):
 class CombineRequest(BaseModel):
     manga_name: str
     clean_folders: bool = True
+
+class UpdateArchiveRequest(BaseModel):
+    filepath: str
+    manga_name: Optional[str] = None
+    provider: Optional[str] = None
+    manga_id: Optional[str] = None
+    chapter_ids: Optional[List[str]] = None
+    max_chapters: Optional[int] = None
+    save_cbz: bool = False
+    save_pdf: bool = False
+    clean_temp: bool = True
 
 class ConvertLibraryRequest(BaseModel):
     filepath: str
@@ -329,6 +342,126 @@ def combine_folders(req: CombineRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/library/check-updates")
+def check_library_updates(filepath: Optional[str] = None):
+    try:
+        if filepath:
+            real_path = _checked_library_file(filepath)
+            lib = scan_library(config.OUTPUT_DIR)
+            arc_info = None
+            for a in lib.get("combined_archives", []):
+                if os.path.abspath(a["filepath"]) == os.path.abspath(real_path):
+                    arc_info = a
+                    break
+            if not arc_info:
+                arc_info = {
+                    "manga_name": os.path.splitext(os.path.basename(real_path))[0],
+                    "filepath": real_path,
+                    "chapters": [],
+                }
+            result = check_archive_updates(arc_info)
+            return {"updates": [result]}
+        else:
+            results = check_all_library_updates(config.OUTPUT_DIR)
+            return {"updates": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/library/update-archive")
+def update_archive(req: UpdateArchiveRequest):
+    real_path = _checked_library_file(req.filepath)
+    if not os.path.isfile(real_path):
+        raise HTTPException(status_code=404, detail="Archive file not found")
+
+    # If chapter_ids are explicitly provided with provider and manga_id
+    if req.provider and req.chapter_ids:
+        prov = get_provider(req.provider)
+        if not prov:
+            raise HTTPException(status_code=400, detail=f"Provider {req.provider} not found")
+        try:
+            _, _, all_chaps = prov.get_manga_details(req.manga_id) if req.manga_id else (None, None, [])
+            chap_map = {c.id: c for c in all_chaps}
+            target_chapters = [chap_map[cid] for cid in req.chapter_ids if cid in chap_map]
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch chapter details: {e}")
+        manga_title = req.manga_name or os.path.splitext(os.path.basename(real_path))[0]
+    else:
+        # Run check_archive_updates to discover new chapters
+        lib = scan_library(config.OUTPUT_DIR)
+        arc_info = None
+        for a in lib.get("combined_archives", []):
+            if os.path.abspath(a["filepath"]) == os.path.abspath(real_path):
+                arc_info = a
+                break
+        if not arc_info:
+            arc_info = {
+                "manga_name": req.manga_name or os.path.splitext(os.path.basename(real_path))[0],
+                "filepath": real_path,
+                "chapters": [],
+            }
+        
+        update_info = check_archive_updates(arc_info)
+        if not update_info.get("has_updates") or not update_info.get("new_chapters"):
+            return {
+                "status": "up_to_date",
+                "message": update_info.get("error") or "No new chapters found to update.",
+                "queued_chapters": 0,
+            }
+
+        prov = get_provider(update_info["provider"])
+        if not prov:
+            raise HTTPException(status_code=400, detail=f"Provider {update_info.get('provider')} not found")
+
+        raw_chaps = update_info["new_chapters"]
+        if req.chapter_ids:
+            cset = set(req.chapter_ids)
+            raw_chaps = [c for c in raw_chaps if c.get("id") in cset]
+        elif req.max_chapters and req.max_chapters > 0:
+            raw_chaps = raw_chaps[:req.max_chapters]
+
+        target_chapters = [
+            ChapterInfo(
+                id=c["id"],
+                provider=c.get("provider", prov.name),
+                chapter_num=c["chapter_num"],
+                title=c.get("title", ""),
+                volume=c.get("volume", ""),
+                url=c.get("url", ""),
+                extra=c.get("extra", {}),
+            )
+            for c in raw_chaps
+        ]
+        manga_title = update_info.get("manga_name") or req.manga_name or "Manga"
+
+    if not target_chapters:
+        return {"status": "up_to_date", "message": "No new chapters selected for update.", "queued_chapters": 0}
+
+    started = download_manager.start_download_job(
+        provider=prov,
+        manga_title=manga_title,
+        manga_cover="",
+        chapters=target_chapters,
+        output_dir=config.OUTPUT_DIR,
+        custom_title=None,
+        include_range=True,
+        save_cbz=req.save_cbz,
+        save_pdf=req.save_pdf,
+        save_images=False,
+        combine_cbz=True,
+        clean_temp=req.clean_temp,
+        append_to_cbz=real_path,
+    )
+
+    if not started:
+        raise HTTPException(status_code=409, detail="A download job is already actively running")
+
+    return {
+        "status": "started",
+        "manga_title": manga_title,
+        "queued_chapters": len(target_chapters),
+        "target_file": os.path.basename(real_path),
+    }
+
 def _checked_library_file(path: str) -> str:
     try:
         return resolve_library_path(path, config.OUTPUT_DIR)
@@ -343,6 +476,17 @@ def _checked_library_file(path: str) -> str:
 def download_file(path: str):
     real_path = _checked_library_file(path)
     return FileResponse(real_path, filename=os.path.basename(real_path))
+
+@app.delete("/api/files/delete")
+def delete_library_file(path: str):
+    real_path = _checked_library_file(path)
+    try:
+        os.remove(real_path)
+        return {"status": "deleted", "filename": os.path.basename(real_path)}
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="File is in use and cannot be deleted right now.")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not delete file: {e}")
 
 @app.get("/api/files/view")
 def view_file_inline(path: str):

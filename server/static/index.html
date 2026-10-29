@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MangaScrapper Pro</title>
-    <link rel="stylesheet" href="/static/style.css?v=3.1">
+    <link rel="stylesheet" href="/static/style.css?v=3.3">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📖</text></svg>">
 </head>
 <body>
@@ -365,7 +365,10 @@
                 <button type="button" id="btn-return-library-to-search" class="btn-back">
                     <span>←</span> Return to Manga Search
                 </button>
-                <button id="btn-refresh-library" class="btn-secondary">🔄 Refresh</button>
+                <div style="display:flex;gap:0.75rem;align-items:center;">
+                    <button id="btn-check-library-updates" class="btn-amber">⚡ Check for Updates</button>
+                    <button id="btn-refresh-library" class="btn-secondary">🔄 Refresh</button>
+                </div>
             </div>
 
             <div class="library-stats-row">
@@ -387,6 +390,19 @@
                 <div>
                     <span class="folder-label">Output Directory: </span>
                     <strong id="output-dir-path"></strong>
+                </div>
+            </div>
+
+            <!-- Library Updates Banner -->
+            <div id="library-updates-banner" class="uncombined-section" style="display:none; border-color:#f59e0b; background: rgba(245, 158, 11, 0.08);">
+                <div class="uncombined-header">
+                    <div>
+                        <h3 class="uncombined-title" style="color:#f59e0b;">🔥 Updates Available!</h3>
+                        <p id="updates-banner-text" class="uncombined-sub">New chapters were found online for series in your library.</p>
+                    </div>
+                    <div style="display:flex;gap:0.75rem;align-items:center;">
+                        <button id="btn-update-all-series" class="btn-amber">⚡ Update All Series</button>
+                    </div>
                 </div>
             </div>
 
@@ -545,9 +561,26 @@
         </div>
     </div>
 
+    <!-- Update Series Modal -->
+    <div id="update-modal" class="reader-modal" style="display:none; background:rgba(0,0,0,0.75); z-index:9999; justify-content:center; align-items:center; backdrop-filter:blur(4px);" aria-hidden="true">
+        <div style="background:#1e293b; max-width:640px; width:92%; border-radius:14px; border:1px solid #334155; padding:1.75rem; color:#f8fafc; max-height:85vh; display:flex; flex-direction:column; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.65);">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #334155; padding-bottom:1.15rem; margin-bottom:1.25rem;">
+                <h3 id="update-modal-title" style="margin:0; font-size:1.25rem; font-weight:700; color:#f8fafc; display:flex; align-items:center; gap:0.5rem;">⚡ Update Series</h3>
+                <button type="button" id="btn-close-update-modal" class="btn-secondary" style="padding:6px 12px; cursor:pointer; font-weight:700;">✕</button>
+            </div>
+            <div id="update-modal-body" style="overflow-y:auto; flex:1; padding-right:0.5rem;">
+                <!-- Dynamically filled with update details -->
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:0.85rem; border-top:1px solid #334155; padding-top:1.25rem; margin-top:1.25rem;">
+                <button type="button" id="btn-cancel-update-modal" class="btn-secondary">Cancel</button>
+                <button type="button" id="btn-confirm-update-modal" class="btn-amber">⚡ Download & Append to Archive</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notifications Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <script src="/static/app.js?v=3.1"></script>
+    <script src="/static/app.js?v=3.4"></script>
 </body>
 </html>

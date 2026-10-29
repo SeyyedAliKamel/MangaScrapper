@@ -24,20 +24,35 @@ A modern, high-speed multi-source manga downloader, reader, and archiver with a 
    - **nhentai**: Official v2 REST API integration.
    - Quick 6-digit ID resolution (e.g. `177013`), title & tag search, and 1-click gallery downloads to CBZ or PDF.
 
-4. **🔄 CBZ ⇄ PDF Converter (with Live Progress & Cancel)**
+4. **📖 Built-in Web Reader (CBZ & PDF)**
+   - Read downloaded manga and doujinshi directly in your browser without external viewer apps.
+   - Supports **Single Page** mode, **Webtoon / Vertical Scroll**, and **Native PDF**.
+   - Includes reading direction toggle (LTR / RTL), zoom controls, fit-height / fit-width, live page slider, and chapter jump navigation.
+
+5. **🛠️ Download Failure Recovery Dashboard**
+   - Automatically tracks any missing or interrupted pages during high-speed concurrent downloads.
+   - One-click retry for individual pages, full chapters, or all missing pages at once.
+   - Automatically patches and repacks the final CBZ and PDF documents when missing pages are recovered.
+
+6. **🏷️ Custom Series Naming & Series-Aware Chapter Names**
+   - Live naming preview in the download modal with optional custom series/archive naming.
+   - Series-aware chapter filenames: `Series - Chapter 1 - Title.pdf` (no more ambiguous `Chapter_1.pdf` files).
+   - Optional chapter range toggle in combined archives (`Series_Chapter_1-50.cbz` vs. `Series.cbz`).
+
+7. **🔄 CBZ ⇄ PDF Converter (with Live Progress & Cancel)**
    - Convert **CBZ to PDF**: Unpacks images with natural page ordering and losslessly binds into PDF documents using `img2pdf`.
    - Convert **PDF to CBZ**: High-speed, robust page rendering using `pypdfium2` and packages into a `.cbz` comic archive.
    - Real-time animated progress bar with percentage, page count indicator, and instant cancellation.
    - Available via Drag & Drop in the Web UI, 1-click in the Library tab, or directly via CLI (`--convert`).
 
-5. **🔍 Universal Search & Direct URL Resolution (No manual IDs required!)**
-   - Search by title or keyword across manga providers in parallel.
-   - Or paste any direct manga or chapter URL (from MangaDex, MangaPill) to open and download it immediately.
+8. **🔍 Universal Search & Direct URL Resolution (No manual IDs required!)**
+   - Search by title or keyword across manga providers in parallel with cross-provider relevance ranking.
+   - Or paste any direct manga or chapter URL (from MangaDex, MangaPill, CIN) to open and download it immediately.
 
-6. **📦 Flexible Export & Archiving**
-   - Per-chapter **CBZ** (`Chapter_1.cbz`)
-   - Per-chapter **PDF** (`Chapter_1.pdf`)
-   - **Combined Manga Archive** (`MangaName_Chapter_1-100.cbz`)
+9. **📦 Flexible Export & Archiving**
+   - Per-chapter **CBZ** (`Series - Chapter 1.cbz`)
+   - Per-chapter **PDF** (`Series - Chapter 1.pdf`)
+   - **Combined Manga Archive** (`Series_Chapter_1-100.cbz`)
    - Auto-clean temporary folder artifacts after combining.
    - Incremental update support: append newly released chapters to an existing combined CBZ.
 
@@ -97,3 +112,37 @@ python main.py --convert "manga_download/Chapter_1.pdf"
 
 Settings can be managed directly in the **Settings tab** of the Web UI or in `config.py`:
 - `OUTPUT_DIR`: The folder where chapters, PDFs, and CBZ archives are stored (default: `manga_download`).
+
+---
+
+## 🗺️ Roadmap & Planned Features (TODO List)
+
+The following improvements are queued for evaluation and approval:
+
+- [ ] **1. 🖼️ AI Manga Upscaler (2× / 4× Real-ESRGAN / Waifu2x)**
+  - Optional toggle in download options (`[ ] AI Upscale Pages`) powered by a lightweight, cross-platform Vulkan binary (`realesrgan-ncnn-vulkan`).
+  - Reconstructs jagged line art and cleans low-res retro scans/furigana into razor-sharp, print-grade pages without needing heavy CUDA/PyTorch setups.
+
+- [ ] **2. 📖 Reader Polish: Two-Page Spread Mode (Manga Spread View)**
+  - Add a **Double-Page (Spread)** reading mode to the built-in reader displaying side-by-side pages with proper Japanese Right-to-Left (RTL) page pairing.
+  - Preserves dramatic two-page action spreads and panoramic artwork.
+
+- [ ] **3. 🔖 Reading Progress & Bookmark Persistence**
+  - Save last read page, reading mode, and zoom settings per manga/chapter in `localStorage`.
+  - Automatically resumes reading where you left off when opening any book from the Library.
+
+- [x] **4. 🔄 Auto-Update Library (Check for New Chapters)** *(Implemented)*
+  - A "Check for Updates" button on library series cards and global toolbar that queries online catalogs for new releases.
+  - 1-click update modal with scope selection (All new chapters, next 1/5/10/25/50 chapters), automatically fetching and cleanly appending them to existing combined CBZ archives with natural chapter sorting and automatic range updating (e.g. `Chapter 1-2.cbz` -> `Chapter 1-10.cbz`).
+
+- [ ] **5. 🗂️ Sequential Download Queue**
+  - Queue multiple manga series to download sequentially in the background.
+  - Ideal for large multi-series batch downloads and overnight runs.
+
+- [ ] **6. 🏷️ Embedded `ComicInfo.xml` Metadata (Tachiyomi / Mihon / Kavita / Komga)**
+  - Automatically inject a standard `ComicInfo.xml` file inside all generated `.cbz` archives containing title, author, summary, tags, and chapter numbers.
+  - Instantly loads rich cover art, series info, and chapter indices in third-party readers.
+
+- [ ] **7. 📱 Kindle & E-Reader Optimized Export (EPUB & Grayscale Compression)**
+  - Add dedicated export profiles for e-ink devices (Kindle Paperwhite, Kobo) with 8-bit grayscale optimization and `.epub` packaging.
+  - Cuts file sizes by 60–70% while perfectly formatting images for e-reader aspect ratios.
