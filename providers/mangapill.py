@@ -1,7 +1,9 @@
 import re
+import requests
 from typing import List, Optional, Dict, Any
 from bs4 import BeautifulSoup
 from .base import BaseMangaProvider, MangaSearchResult, ChapterInfo, parse_chapter_number
+from core.comick_meta import get_comick_metadata
 
 class MangaPillProvider(BaseMangaProvider):
     name = "mangapill"
@@ -51,22 +53,29 @@ class MangaPillProvider(BaseMangaProvider):
                         break
 
             img_el = container.select_one("img")
-            cover = ""
+            raw_cover = ""
             if img_el:
-                cover = img_el.get("data-src") or img_el.get("src") or ""
+                raw_cover = img_el.get("data-src") or img_el.get("src") or ""
 
             # Check if we already have this id
             if any(r.id == m_id for r in results):
                 continue
+
+            # Auto-enrich with Comick cover & chapter counts
+            meta = get_comick_metadata(title) if title else None
+            cover = (meta.get("cover_url") if meta else "") or (f"/api/proxy/image?url={requests.utils.quote(raw_cover)}" if raw_cover else "")
+            desc = (meta.get("desc") if meta else "") or ""
+            last_chap = f"{meta['last_chapter']} Chapters" if (meta and meta.get("last_chapter")) else ""
+            status = (meta.get("status") if meta else "") or "Ongoing"
 
             results.append(MangaSearchResult(
                 id=m_id,
                 provider=self.name,
                 title=title or m_id,
                 cover_url=cover,
-                description="",
-                status="",
-                latest_chapter="",
+                description=desc[:280] + ("..." if len(desc) > 280 else ""),
+                status=status,
+                latest_chapter=last_chap,
                 url=f"{self.base_url}/manga/{m_id}",
             ))
             if len(results) >= limit:
@@ -89,7 +98,14 @@ class MangaPillProvider(BaseMangaProvider):
         desc = desc_el.text.strip() if desc_el else ""
 
         img_el = soup.select_one("div.container img")
-        cover = img_el.get("data-src") or img_el.get("src") or "" if img_el else ""
+        raw_cover = img_el.get("data-src") or img_el.get("src") or "" if img_el else ""
+
+        # Auto-enrich with Comick metadata
+        meta = get_comick_metadata(title) if title else None
+        cover = (meta.get("cover_url") if meta else "") or (f"/api/proxy/image?url={requests.utils.quote(raw_cover)}" if raw_cover else "")
+        desc = (meta.get("desc") if meta else "") or desc
+        last_chap = f"{meta['last_chapter']} Chapters" if (meta and meta.get("last_chapter")) else ""
+        status = (meta.get("status") if meta else "") or "Ongoing"
 
         return MangaSearchResult(
             id=path,
@@ -97,8 +113,8 @@ class MangaPillProvider(BaseMangaProvider):
             title=title,
             cover_url=cover,
             description=desc,
-            status="",
-            latest_chapter="",
+            status=status,
+            latest_chapter=last_chap,
             url=url,
         )
 

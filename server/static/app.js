@@ -1,35 +1,52 @@
+// State variables
 let currentManga = null;
 let currentChapters = [];
 let selectedChapterIds = new Set();
 let downloadPollInterval = null;
 
+let currentHGallery = null;
+let currentHChapters = [];
+
+let activeConversionJobId = null;
+let conversionPollInterval = null;
+
 document.addEventListener('DOMContentLoaded', () => {
     initTabs();
+    initReturnButtons();
     loadProviders();
     loadConfig();
     startDownloadStatusPolling();
     loadLibrary();
     initConverter();
+    initHSearch();
 
+    // Manga Search form
     document.getElementById('search-form').addEventListener('submit', (e) => {
         e.preventDefault();
-        performSearch();
+        performMangaSearch();
     });
 
+    // Manga Chapter selection buttons
     document.getElementById('btn-select-all').addEventListener('click', selectAllChapters);
     document.getElementById('btn-deselect-all').addEventListener('click', deselectAllChapters);
     document.getElementById('btn-apply-range').addEventListener('click', applyChapterRange);
-    document.getElementById('btn-start-download').addEventListener('click', startDownloadJob);
+    document.getElementById('btn-start-download').addEventListener('click', startMangaDownloadJob);
     document.getElementById('btn-cancel-download').addEventListener('click', cancelDownloadJob);
-    document.getElementById('btn-back-to-results').addEventListener('click', () => {
-        document.getElementById('detail-view').classList.remove('active');
-        document.getElementById('results-section').style.display = 'block';
-    });
+
+    // Custom Naming inputs
+    const customNameEl = document.getElementById('opt-custom-name');
+    if (customNameEl) customNameEl.addEventListener('input', updateNamingPreview);
+    const includeRangeEl = document.getElementById('opt-include-range');
+    if (includeRangeEl) includeRangeEl.addEventListener('change', updateNamingPreview);
+
+    // Library buttons
     document.getElementById('btn-refresh-library').addEventListener('click', loadLibrary);
     document.getElementById('settings-form').addEventListener('submit', saveConfig);
 });
 
-// Tab Navigation
+// ==========================================
+// 1. Navigation & Return Buttons
+// ==========================================
 function initTabs() {
     const tabBtns = document.querySelectorAll('.tab-btn');
     tabBtns.forEach(btn => {
@@ -41,6 +58,13 @@ function initTabs() {
             btn.classList.add('active');
             const targetContent = document.getElementById(targetId);
             if (targetContent) targetContent.classList.add('active');
+
+            // Aura Theme transition animation when switching to H-Search
+            if (targetId === 'tab-h-search') {
+                document.body.classList.add('theme-aura-dark');
+            } else {
+                document.body.classList.remove('theme-aura-dark');
+            }
 
             if (targetId === 'tab-library') {
                 loadLibrary();
@@ -54,13 +78,53 @@ function switchTab(tabId) {
     if (btn) btn.click();
 }
 
-// Load Available Providers
+function initReturnButtons() {
+    // Return from Manga Detail to Search Results
+    const backToResults = () => {
+        document.getElementById('detail-view').classList.remove('active');
+        document.getElementById('results-section').style.display = 'block';
+    };
+    document.getElementById('btn-back-to-results').addEventListener('click', backToResults);
+    document.getElementById('btn-bottom-back').addEventListener('click', backToResults);
+
+    // Return from H-Gallery Detail to Galleries Results
+    document.getElementById('btn-back-to-h-results').addEventListener('click', () => {
+        document.getElementById('h-detail-view').classList.remove('active');
+        document.getElementById('h-results-section').style.display = 'block';
+    });
+
+    // Return from Active Downloads
+    document.getElementById('btn-return-from-downloads').addEventListener('click', () => {
+        switchTab('tab-search');
+    });
+    document.getElementById('btn-goto-library').addEventListener('click', () => {
+        switchTab('tab-library');
+    });
+
+    // Return from Library
+    document.getElementById('btn-return-library-to-search').addEventListener('click', () => {
+        switchTab('tab-search');
+    });
+
+    // Return from Converter
+    document.getElementById('btn-return-converter-to-search').addEventListener('click', () => {
+        switchTab('tab-search');
+    });
+    document.getElementById('btn-goto-library-from-conv').addEventListener('click', () => {
+        switchTab('tab-library');
+    });
+}
+
+
+// ==========================================
+// 2. Standard Manga Search & Chapter Selection
+// ==========================================
 async function loadProviders() {
     try {
         const resp = await fetch('/api/providers');
         const data = await resp.json();
         const select = document.getElementById('search-provider');
-        select.innerHTML = '<option value="all">🌐 All Sources</option>';
+        select.innerHTML = '<option value="all">🌐 All Manga Sources</option>';
         data.providers.forEach(p => {
             const opt = document.createElement('option');
             opt.value = p.id;
@@ -68,12 +132,11 @@ async function loadProviders() {
             select.appendChild(opt);
         });
     } catch (err) {
-        console.error('Failed to load providers:', err);
+        console.error('Failed to load manga providers:', err);
     }
 }
 
-// Search
-async function performSearch() {
+async function performMangaSearch() {
     const query = document.getElementById('search-input').value.trim();
     const provider = document.getElementById('search-provider').value;
     if (!query) return;
@@ -84,12 +147,11 @@ async function performSearch() {
     btn.disabled = true;
 
     const resultsGrid = document.getElementById('results-grid');
-    resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">Searching across sources...</div>';
+    resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">Searching manga sources...</div>';
     document.getElementById('results-section').style.display = 'block';
     document.getElementById('detail-view').classList.remove('active');
 
     try {
-        // If it's a direct URL or ID resolve directly
         if (query.startsWith('http://') || query.startsWith('https://')) {
             const resolveResp = await fetch('/api/resolve', {
                 method: 'POST',
@@ -121,14 +183,14 @@ async function performSearch() {
             const coverUrl = manga.cover_url || 'https://via.placeholder.com/240x360?text=No+Cover';
             card.innerHTML = `
                 <div class="manga-cover-wrap">
-                    <img src="${coverUrl}" class="manga-cover-img" alt="${manga.title}" onerror="this.src='https://via.placeholder.com/240x360?text=Cover+Not+Found'">
-                    <span class="provider-badge">${manga.provider}</span>
+                    <img src="${coverUrl}" class="manga-cover-img" alt="${escapeHtml(manga.title)}" onerror="this.src='https://via.placeholder.com/240x360?text=Cover+Not+Found'">
+                    <span class="provider-badge">${escapeHtml(manga.provider)}</span>
                 </div>
                 <div class="manga-card-info">
-                    <div class="manga-card-title" title="${manga.title}">${manga.title}</div>
+                    <div class="manga-card-title" title="${escapeHtml(manga.title)}">${escapeHtml(manga.title)}</div>
                     <div class="manga-card-meta">
-                        <span>${manga.status || 'Manga'}</span>
-                        <span>${manga.latest_chapter ? 'Ch. ' + manga.latest_chapter : ''}</span>
+                        <span>${escapeHtml(manga.status || 'Manga')}</span>
+                        <span>${manga.latest_chapter ? 'Ch. ' + escapeHtml(manga.latest_chapter) : ''}</span>
                     </div>
                 </div>
             `;
@@ -137,14 +199,13 @@ async function performSearch() {
         });
 
     } catch (err) {
-        resultsGrid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1;text-align:center;padding:2rem;">Error: ${err.message}</div>`;
+        resultsGrid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1;text-align:center;padding:2rem;">Error: ${escapeHtml(err.message)}</div>`;
     } finally {
         btn.innerHTML = originalText;
         btn.disabled = false;
     }
 }
 
-// Load Manga details and chapter list
 async function loadMangaAndChapters(manga) {
     const detailView = document.getElementById('detail-view');
     detailView.classList.add('active');
@@ -167,7 +228,7 @@ async function loadMangaAndChapters(manga) {
         currentChapters = data.chapters || [];
         renderChaptersGrid();
     } catch (err) {
-        document.getElementById('chapters-grid').innerHTML = `<div style="color:var(--danger);padding:1rem;">Failed to load chapters: ${err.message}</div>`;
+        document.getElementById('chapters-grid').innerHTML = `<div style="color:var(--danger);padding:1rem;">Failed to load chapters: ${escapeHtml(err.message)}</div>`;
     }
 }
 
@@ -186,7 +247,14 @@ function showMangaDetails(manga, provider, chapters) {
     document.getElementById('detail-cover').src = manga.cover_url || 'https://via.placeholder.com/240x360?text=No+Cover';
     document.getElementById('detail-desc').textContent = manga.description || 'No description provided.';
 
+    const customNameEl = document.getElementById('opt-custom-name');
+    if (customNameEl) {
+        customNameEl.value = '';
+        customNameEl.placeholder = manga.title || 'Manga Title';
+    }
+
     renderChaptersGrid();
+    updateNamingPreview();
 }
 
 function renderChaptersGrid() {
@@ -204,7 +272,7 @@ function renderChaptersGrid() {
         item.className = 'chapter-item' + (selectedChapterIds.has(chap.id) ? ' selected' : '');
         item.innerHTML = `
             <input type="checkbox" ${selectedChapterIds.has(chap.id) ? 'checked' : ''}>
-            <span style="font-weight:600;">Ch. ${chap.chapter_num}</span>
+            <span style="font-weight:600;">Ch. ${escapeHtml(chap.chapter_num)}</span>
         `;
 
         const chk = item.querySelector('input');
@@ -261,20 +329,61 @@ function applyChapterRange() {
     renderChaptersGrid();
 }
 
+function updateNamingPreview() {
+    if (!currentManga) return;
+    const customNameEl = document.getElementById('opt-custom-name');
+    const includeRangeEl = document.getElementById('opt-include-range');
+    const previewArchiveEl = document.getElementById('naming-preview-archive');
+    const previewChapterEl = document.getElementById('naming-preview-chapter');
+    if (!previewArchiveEl || !previewChapterEl) return;
+
+    const customName = customNameEl ? customNameEl.value.trim() : '';
+    const baseName = customName || currentManga.title || 'Manga';
+    const includeRange = includeRangeEl ? includeRangeEl.checked : true;
+
+    let first = '1', last = '1';
+    if (currentChapters && currentChapters.length > 0) {
+        const selected = currentChapters.filter(c => selectedChapterIds.has(c.id));
+        if (selected.length > 0) {
+            const nums = selected.map(c => parseFloat(c.chapter_num)).filter(n => !isNaN(n)).sort((a,b) => a - b);
+            if (nums.length > 0) {
+                first = nums[0].toString();
+                last = nums[nums.length - 1].toString();
+            } else {
+                first = selected[0].chapter_num || '1';
+                last = selected[selected.length - 1].chapter_num || first;
+            }
+        }
+    }
+
+    const archiveName = includeRange ? `${baseName}_Chapter_${first}-${last}.cbz` : `${baseName}.cbz`;
+    const chapterName = `${baseName} - Chapter ${first}.pdf`;
+
+    previewArchiveEl.textContent = `📦 Archive: ${archiveName}`;
+    previewChapterEl.textContent = `📄 Chapter: ${chapterName}`;
+}
+
 function updateSelectionCount() {
     const badge = document.getElementById('selected-count-badge');
     badge.textContent = `${selectedChapterIds.size} of ${currentChapters.length} selected`;
     document.getElementById('btn-start-download').disabled = (selectedChapterIds.size === 0);
+    updateNamingPreview();
 }
 
-// Start Download Job
-async function startDownloadJob() {
+async function startMangaDownloadJob() {
     if (selectedChapterIds.size === 0) return;
+
+    const customNameEl = document.getElementById('opt-custom-name');
+    const includeRangeEl = document.getElementById('opt-include-range');
+    const customTitle = customNameEl && customNameEl.value.trim() ? customNameEl.value.trim() : undefined;
+    const includeRange = includeRangeEl ? includeRangeEl.checked : true;
 
     const payload = {
         provider: currentManga.provider,
         manga_id: currentManga.id,
         manga_title: currentManga.title,
+        custom_title: customTitle,
+        include_range: includeRange,
         manga_cover: currentManga.cover_url || '',
         selected_chapter_ids: Array.from(selectedChapterIds),
         chapters: currentChapters,
@@ -304,49 +413,276 @@ async function startDownloadJob() {
     }
 }
 
+
+// ==========================================
+// 3. Dedicated H / Doujinshi Search (nhentai)
+// ==========================================
+function initHSearch() {
+    const form = document.getElementById('h-search-form');
+    if (!form) return;
+
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const query = document.getElementById('h-search-input').value.trim();
+        if (query) performHSearch(query);
+    });
+
+    // Quick tag pills
+    document.querySelectorAll('.quick-tag-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+            const q = pill.dataset.query;
+            document.getElementById('h-search-input').value = q;
+            performHSearch(q);
+        });
+    });
+
+    // H-Download action buttons
+    document.getElementById('btn-h-download-cbz').addEventListener('click', () => startHDownload(true, false));
+    document.getElementById('btn-h-download-pdf').addEventListener('click', () => startHDownload(false, true));
+    document.getElementById('btn-h-download-both').addEventListener('click', () => startHDownload(true, true));
+}
+
+async function performHSearch(query) {
+    const btn = document.getElementById('h-search-btn');
+    const originalText = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span> Searching...';
+    btn.disabled = true;
+
+    const providerSelect = document.getElementById('h-search-provider');
+    const provider = providerSelect ? providerSelect.value : 'all';
+
+    const resultsGrid = document.getElementById('h-results-grid');
+    resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">Searching doujin galleries...</div>';
+    document.getElementById('h-results-section').style.display = 'block';
+    document.getElementById('h-detail-view').classList.remove('active');
+
+    try {
+        // Direct ID or URL resolution
+        if (/^\d{4,7}$/.test(query) || query.includes('nhentai.net') || query.includes('cin.wtf') || query.includes('cin.blue')) {
+            const resolveResp = await fetch('/api/h/resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query_or_url: query, provider: provider !== 'all' ? provider : null })
+            });
+            if (resolveResp.ok) {
+                const data = await resolveResp.json();
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                showHGalleryDetails(data.gallery, data.chapters, data.provider);
+                return;
+            }
+        }
+
+        const resp = await fetch(`/api/h/search?q=${encodeURIComponent(query)}&provider=${encodeURIComponent(provider)}&limit=24`);
+        const data = await resp.json();
+
+        resultsGrid.innerHTML = '';
+        if (!data.results || data.results.length === 0) {
+            resultsGrid.innerHTML = '<div style="color:var(--text-muted);grid-column:1/-1;text-align:center;padding:2rem;">No galleries found. Try another query or enter a 6-digit ID.</div>';
+            return;
+        }
+
+        data.results.forEach(gal => {
+            const card = document.createElement('div');
+            card.className = 'manga-card';
+
+            const coverUrl = gal.cover_url || 'https://via.placeholder.com/240x360?text=18+Gallery';
+            const badgeBg = gal.provider === 'cin' ? 'linear-gradient(135deg, #8b5cf6, #ec4899)' : 'linear-gradient(135deg, #ec4899, #f43f5e)';
+            const provLabel = gal.provider ? gal.provider.toUpperCase() : '18+';
+
+            card.innerHTML = `
+                <div class="manga-cover-wrap">
+                    <img src="${coverUrl}" class="manga-cover-img" alt="${escapeHtml(gal.title)}" onerror="this.src='https://via.placeholder.com/240x360?text=No+Cover'">
+                    <span class="provider-badge" style="background:${badgeBg};">${provLabel} #${escapeHtml(gal.id)}</span>
+                </div>
+                <div class="manga-card-info">
+                    <div class="manga-card-title" title="${escapeHtml(gal.title)}">${escapeHtml(gal.title)}</div>
+                    <div class="manga-card-meta">
+                        <span style="color:#ec4899;font-weight:600;">${provLabel}</span>
+                        <span>${escapeHtml(gal.description || '')}</span>
+                    </div>
+                </div>
+            `;
+            card.addEventListener('click', () => loadHGallery(gal.id, gal.provider));
+            resultsGrid.appendChild(card);
+        });
+
+    } catch (err) {
+        resultsGrid.innerHTML = `<div style="color:var(--danger);grid-column:1/-1;text-align:center;padding:2rem;">Error: ${escapeHtml(err.message)}</div>`;
+    } finally {
+        btn.innerHTML = originalText;
+        btn.disabled = false;
+    }
+}
+
+async function loadHGallery(gid, provider) {
+    try {
+        const resp = await fetch('/api/h/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query_or_url: String(gid), provider: provider || null })
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            showHGalleryDetails(data.gallery, data.chapters, data.provider);
+        }
+    } catch (err) {
+        alert('Failed to load gallery: ' + err.message);
+    }
+}
+
+function showHGalleryDetails(gallery, chapters, providerName) {
+    currentHGallery = gallery;
+    currentHChapters = chapters;
+
+    const detailView = document.getElementById('h-detail-view');
+    detailView.classList.add('active');
+    document.getElementById('h-results-section').style.display = 'none';
+
+    document.getElementById('h-detail-title').textContent = gallery.title;
+    document.getElementById('h-detail-id').textContent = `ID: #${gallery.id}`;
+    if (document.getElementById('h-detail-provider')) {
+        document.getElementById('h-detail-provider').textContent = (providerName || gallery.provider || 'H-SOURCE').toUpperCase();
+    }
+    document.getElementById('h-detail-cover').src = gallery.cover_url || 'https://via.placeholder.com/240x360?text=No+Cover';
+    document.getElementById('h-detail-pages').textContent = gallery.description || `${chapters[0]?.page_count || 1} pages`;
+
+    const tagsContainer = document.getElementById('h-detail-tags');
+    tagsContainer.innerHTML = '';
+    if (gallery.description && gallery.description.startsWith('Tags:')) {
+        const tags = gallery.description.replace('Tags:', '').split(',');
+        tags.forEach(t => {
+            const pill = document.createElement('span');
+            pill.className = 'h-tag-item';
+            pill.textContent = t.trim();
+            tagsContainer.appendChild(pill);
+        });
+    }
+}
+
+async function startHDownload(saveCbz, savePdf) {
+    if (!currentHGallery || !currentHChapters || currentHChapters.length === 0) return;
+
+    const chap = currentHChapters[0];
+    const customTitle = (document.getElementById('h-custom-name')?.value.trim()) || undefined;
+    const provName = currentHGallery.provider || 'nhentai';
+    const payload = {
+        provider: provName,
+        manga_id: currentHGallery.id,
+        manga_title: `[${currentHGallery.id}] ${currentHGallery.title}`,
+        custom_title: customTitle,
+        include_range: false,
+        manga_cover: currentHGallery.cover_url || '',
+        selected_chapter_ids: [chap.id],
+        chapters: currentHChapters,
+        save_cbz: saveCbz,
+        save_pdf: savePdf,
+        save_images: false,
+        combine_cbz: false,
+        clean_temp: true,
+    };
+
+    try {
+        const resp = await fetch('/api/download/start', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            alert(`Error: ${err.detail || 'Could not start download'}`);
+            return;
+        }
+
+        switchTab('tab-downloads');
+    } catch (err) {
+        alert(`Failed: ${err.message}`);
+    }
+}
+
+
+// ==========================================
+// 4. Download Manager & Immediate Cancellation
+// ==========================================
 async function cancelDownloadJob() {
+    const btn = document.getElementById('btn-cancel-download');
+    btn.innerHTML = '<span class="spinner"></span> Cancelling...';
+    btn.disabled = true;
+
     try {
         await fetch('/api/download/cancel', { method: 'POST' });
+        pollDownloadStatus();
     } catch (err) {
         console.error('Cancel request failed:', err);
     }
 }
 
-// Download Polling
 function startDownloadStatusPolling() {
     if (downloadPollInterval) clearInterval(downloadPollInterval);
     downloadPollInterval = setInterval(pollDownloadStatus, 1000);
 }
 
+let lastDownloadStatus = null;
+
 async function pollDownloadStatus() {
     try {
-        const resp = await fetch('/api/download/status');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const resp = await fetch('/api/download/status', { signal: controller.signal });
+        clearTimeout(timeoutId);
+        if (!resp.ok) return;
         const state = await resp.json();
 
         const dot = document.getElementById('status-indicator-dot');
         const text = document.getElementById('status-indicator-text');
-        dot.className = 'status-dot ' + state.status;
-        text.textContent = state.status.toUpperCase();
+        dot.className = 'status-dot ' + (state.status || 'idle');
+        text.textContent = (state.status || 'IDLE').toUpperCase();
 
         const activeTitle = document.getElementById('active-manga-title');
         const activeSub = document.getElementById('active-manga-sub');
+        const activeStage = document.getElementById('active-manga-stage');
+
         if (state.manga_title) {
             activeTitle.textContent = state.manga_title;
-            activeSub.textContent = `Provider: ${state.provider} | Total chapters: ${state.total_chapters}`;
+            activeSub.textContent = `Provider: ${state.provider || 'Unknown'} | Total chapters: ${state.total_chapters}`;
         } else {
             activeTitle.textContent = 'No active task';
-            activeSub.textContent = 'Select a manga and chapters to begin downloading';
+            activeSub.textContent = 'Select a manga or gallery to begin downloading';
+        }
+
+        if (activeStage) {
+            activeStage.textContent = state.stage || (state.status === 'running' ? 'Downloading...' : '');
+            if (state.status === 'completed') {
+                activeStage.style.color = 'var(--success)';
+            } else if (state.status === 'error') {
+                activeStage.style.color = 'var(--danger)';
+            } else if (state.status === 'cancelled') {
+                activeStage.style.color = 'var(--warning)';
+            } else {
+                activeStage.style.color = 'var(--accent-color)';
+            }
         }
 
         // Chapters Progress
         const chPercent = state.total_chapters > 0 ? (state.completed_chapters / state.total_chapters) * 100 : 0;
         document.getElementById('chapters-progress-fill').style.width = `${chPercent}%`;
-        document.getElementById('chapters-progress-label').textContent = `${state.completed_chapters} / ${state.total_chapters} Chapters ${state.current_chapter ? '(Ch. ' + state.current_chapter + ')' : ''}`;
+        let chLabel = `${state.completed_chapters} / ${state.total_chapters} Chapters`;
+        if (state.status === 'completed' && state.total_chapters > 0) {
+            chLabel = `All ${state.total_chapters} Chapters Completed!`;
+        } else if (state.current_chapter) {
+            chLabel += ` (Ch. ${state.current_chapter})`;
+        }
+        document.getElementById('chapters-progress-label').textContent = chLabel;
 
         // Pages Progress
         const pgPercent = state.total_pages > 0 ? (state.completed_pages / state.total_pages) * 100 : 0;
         document.getElementById('pages-progress-fill').style.width = `${pgPercent}%`;
-        document.getElementById('pages-progress-label').textContent = `${state.completed_pages} / ${state.total_pages} Pages`;
+        let pgLabel = `${state.completed_pages} / ${state.total_pages} Pages`;
+        if (state.status === 'completed' && state.total_pages > 0) {
+            pgLabel = `${state.completed_pages} / ${state.total_pages} Pages (Done)`;
+        }
+        document.getElementById('pages-progress-label').textContent = pgLabel;
 
         // Logs
         const terminal = document.getElementById('log-terminal');
@@ -360,14 +696,238 @@ async function pollDownloadStatus() {
             terminal.scrollTop = terminal.scrollHeight;
         }
 
-        document.getElementById('btn-cancel-download').disabled = (state.status !== 'running');
+        // If newly finished, refresh library tab so downloaded files appear immediately
+        if (lastDownloadStatus === 'running' && state.status === 'completed') {
+            loadLibrary();
+        }
+        lastDownloadStatus = state.status;
+
+        // Cancel Button state
+        const cancelBtn = document.getElementById('btn-cancel-download');
+        if (state.status === 'running') {
+            cancelBtn.disabled = false;
+            cancelBtn.innerHTML = '⏹ Cancel Download';
+        } else {
+            cancelBtn.disabled = true;
+            if (state.status === 'cancelled') {
+                cancelBtn.innerHTML = 'Cancelled';
+            } else {
+                cancelBtn.innerHTML = '⏹ Cancel Download';
+            }
+        }
 
     } catch (err) {
-        console.error('Polling error:', err);
+        if (err.name !== 'AbortError') {
+            console.error('Polling error:', err);
+        }
     }
 }
 
-// Library Management
+
+// ==========================================
+// 5. CBZ ⇄ PDF Converter (with Live Progress & Cancel)
+// ==========================================
+function initConverter() {
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('converter-file-input');
+    const cancelBtn = document.getElementById('btn-cancel-conversion');
+
+    if (!dropZone || !fileInput) return;
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.style.borderColor = 'var(--accent-color)';
+            dropZone.style.background = 'rgba(99, 102, 241, 0.08)';
+        });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            dropZone.style.borderColor = 'var(--border-color)';
+            dropZone.style.background = 'var(--bg-card)';
+        });
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            uploadAndConvertFile(files[0]);
+        }
+    });
+
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            uploadAndConvertFile(e.target.files[0]);
+        }
+    });
+
+    cancelBtn.addEventListener('click', () => {
+        if (activeConversionJobId) {
+            cancelActiveConversion(activeConversionJobId);
+        }
+    });
+}
+
+async function uploadAndConvertFile(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (ext !== 'cbz' && ext !== 'pdf') {
+        alert('Please choose a .cbz or .pdf file.');
+        return;
+    }
+
+    const container = document.getElementById('converter-progress-container');
+    const fileNameEl = document.getElementById('conv-file-name');
+    const badgeEl = document.getElementById('conv-target-badge');
+    const stageEl = document.getElementById('conv-stage-text');
+    const percentEl = document.getElementById('conv-percent-text');
+    const fillEl = document.getElementById('conv-progress-fill');
+    const downloadBtn = document.getElementById('btn-download-converted');
+    const cancelBtn = document.getElementById('btn-cancel-conversion');
+
+    container.style.display = 'block';
+    fileNameEl.textContent = file.name;
+    badgeEl.textContent = (ext === 'cbz') ? 'CONVERTING TO PDF' : 'CONVERTING TO CBZ';
+    stageEl.textContent = 'Uploading file to server...';
+    percentEl.textContent = '0%';
+    fillEl.style.width = '0%';
+    downloadBtn.style.display = 'none';
+    cancelBtn.disabled = false;
+    cancelBtn.style.display = 'inline-block';
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const resp = await fetch('/api/convert/start-upload', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || 'Upload failed');
+        }
+
+        const data = await resp.json();
+        activeConversionJobId = data.job_id;
+        startConversionPolling(data.job_id);
+
+    } catch (err) {
+        stageEl.textContent = 'Error: ' + err.message;
+        cancelBtn.style.display = 'none';
+    }
+}
+
+function startConversionPolling(jobId) {
+    if (conversionPollInterval) clearInterval(conversionPollInterval);
+
+    conversionPollInterval = setInterval(async () => {
+        try {
+            const resp = await fetch(`/api/convert/status/${jobId}`);
+            if (!resp.ok) return;
+
+            const job = await resp.json();
+            const stageEl = document.getElementById('conv-stage-text');
+            const percentEl = document.getElementById('conv-percent-text');
+            const fillEl = document.getElementById('conv-progress-fill');
+            const downloadBtn = document.getElementById('btn-download-converted');
+            const cancelBtn = document.getElementById('btn-cancel-conversion');
+
+            stageEl.textContent = job.stage;
+            percentEl.textContent = `${job.percent}%`;
+            fillEl.style.width = `${job.percent}%`;
+
+            if (job.status === 'completed') {
+                clearInterval(conversionPollInterval);
+                activeConversionJobId = null;
+                cancelBtn.style.display = 'none';
+
+                const dlUrl = `/api/convert/download/${jobId}`;
+                downloadBtn.href = dlUrl;
+                downloadBtn.style.display = 'inline-block';
+
+                // Trigger automatic download
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = dlUrl;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            }
+            else if (job.status === 'cancelled') {
+                clearInterval(conversionPollInterval);
+                activeConversionJobId = null;
+                cancelBtn.style.display = 'none';
+                stageEl.textContent = 'Conversion was cancelled.';
+            }
+            else if (job.status === 'error') {
+                clearInterval(conversionPollInterval);
+                activeConversionJobId = null;
+                cancelBtn.style.display = 'none';
+                stageEl.textContent = 'Conversion failed: ' + (job.error_message || 'Unknown error');
+            }
+
+        } catch (err) {
+            console.error('Error polling conversion:', err);
+        }
+    }, 600);
+}
+
+async function cancelActiveConversion(jobId) {
+    const cancelBtn = document.getElementById('btn-cancel-conversion');
+    cancelBtn.textContent = 'Cancelling...';
+    cancelBtn.disabled = true;
+
+    try {
+        await fetch(`/api/convert/cancel/${jobId}`, { method: 'POST' });
+    } catch (err) {
+        console.error('Cancel failed:', err);
+    }
+}
+
+async function convertLibraryFile(filepath) {
+    const filename = filepath.split(/[\/\\]/).pop();
+    const ext = filename.split('.').pop().toLowerCase();
+    const targetFormat = (ext === 'cbz') ? 'PDF' : 'CBZ';
+
+    if (!confirm(`Convert '${filename}' into a .${targetFormat.toLowerCase()} file?`)) return;
+
+    try {
+        const resp = await fetch('/api/convert/start-library', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filepath: filepath })
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || 'Could not start conversion');
+        }
+
+        const data = await resp.json();
+        switchTab('tab-converter');
+
+        const container = document.getElementById('converter-progress-container');
+        document.getElementById('conv-file-name').textContent = filename;
+        document.getElementById('conv-target-badge').textContent = `TO ${targetFormat}`;
+        container.style.display = 'block';
+
+        activeConversionJobId = data.job_id;
+        startConversionPolling(data.job_id);
+
+    } catch (err) {
+        alert('Failed: ' + err.message);
+    }
+}
+
+
+// ==========================================
+// 6. Library Management
+// ==========================================
 async function loadLibrary() {
     try {
         const resp = await fetch('/api/library');
@@ -418,7 +978,10 @@ async function loadLibrary() {
                     item.innerHTML = `
                         <div>
                             <div class="archive-title">${icon} ${escapeHtml(f.filename)}</div>
-                            <div class="archive-meta">Chapter ${f.chapter_num} • ${f.size_mb} MB • ${f.format.toUpperCase()}</div>
+                            <div class="archive-meta">
+                                ${f.series_name && f.series_name !== 'General' ? `<span class="tag" style="background:rgba(99,102,241,0.2);color:var(--accent-color);font-weight:600;margin-right:0.4rem;">${escapeHtml(f.series_name)}</span>` : ''}
+                                Chapter ${escapeHtml(f.chapter_num)}${f.chapter_title ? ' - ' + escapeHtml(f.chapter_title) : ''} • ${f.size_mb} MB • ${f.format.toUpperCase()}
+                            </div>
                         </div>
                         <div style="display:flex;gap:0.5rem;align-items:center;">
                             <button class="btn-secondary" onclick="convertLibraryFile('${escapeHtml(f.filepath)}')">🔄 Convert to ${targetFormat}</button>
@@ -480,7 +1043,10 @@ async function combineUncombinedFolders() {
     }
 }
 
-// Config / Settings
+
+// ==========================================
+// 7. Config / Settings
+// ==========================================
 async function loadConfig() {
     try {
         const resp = await fetch('/api/config');
@@ -508,116 +1074,6 @@ async function saveConfig(e) {
         }
     } catch (err) {
         alert(`Failed to save settings: ${err.message}`);
-    }
-}
-
-// Converter Module
-function initConverter() {
-    const dropZone = document.getElementById('drop-zone');
-    const fileInput = document.getElementById('converter-file-input');
-    if (!dropZone || !fileInput) return;
-
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.style.borderColor = 'var(--accent-color)';
-            dropZone.style.background = 'rgba(99, 102, 241, 0.08)';
-        });
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            dropZone.style.borderColor = 'var(--border-color)';
-            dropZone.style.background = 'var(--bg-card)';
-        });
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleConverterUpload(files[0]);
-        }
-    });
-
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            handleConverterUpload(e.target.files[0]);
-        }
-    });
-}
-
-async function handleConverterUpload(file) {
-    const ext = file.name.split('.').pop().toLowerCase();
-    if (ext !== 'cbz' && ext !== 'pdf') {
-        alert('Please choose a .cbz or .pdf file.');
-        return;
-    }
-
-    const targetFormat = (ext === 'cbz') ? 'PDF' : 'CBZ';
-    const statusBox = document.getElementById('conversion-status');
-    const statusMsg = document.getElementById('conversion-msg');
-
-    statusBox.style.display = 'block';
-    statusMsg.innerHTML = `<span class="spinner"></span> Converting <strong>${escapeHtml(file.name)}</strong> to ${targetFormat}... please wait`;
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-        const resp = await fetch('/api/convert/upload', {
-            method: 'POST',
-            body: formData,
-        });
-
-        if (!resp.ok) {
-            const err = await resp.json();
-            throw new Error(err.detail || 'Conversion failed');
-        }
-
-        const blob = await resp.blob();
-        const downloadUrl = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = downloadUrl;
-        const outName = file.name.substring(0, file.name.lastIndexOf('.')) + '.' + targetFormat.toLowerCase();
-        a.download = outName;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(downloadUrl);
-        a.remove();
-
-        statusMsg.innerHTML = `✅ Successfully converted <strong>${escapeHtml(file.name)}</strong> to <strong>${escapeHtml(outName)}</strong> and started download!`;
-    } catch (err) {
-        statusMsg.innerHTML = `❌ Conversion failed: ${escapeHtml(err.message)}`;
-    }
-}
-
-async function convertLibraryFile(filepath) {
-    const filename = filepath.split(/[\/\\]/).pop();
-    const ext = filename.split('.').pop().toLowerCase();
-    const targetFormat = (ext === 'cbz') ? 'PDF' : 'CBZ';
-
-    if (!confirm(`Convert '${filename}' into a .${targetFormat.toLowerCase()} document?`)) return;
-
-    try {
-        const resp = await fetch('/api/convert/library', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filepath: filepath })
-        });
-
-        const res = await resp.json();
-        if (resp.ok) {
-            alert(`Conversion complete!\nNew file: ${res.converted_file}`);
-            loadLibrary();
-        } else {
-            alert(`Conversion failed: ${res.detail}`);
-        }
-    } catch (err) {
-        alert(`Error: ${err.message}`);
     }
 }
 

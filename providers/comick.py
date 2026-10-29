@@ -1,210 +1,170 @@
 import re
 import requests
 from typing import List, Optional, Dict, Any
-from .base import BaseMangaProvider, MangaSearchResult, ChapterInfo, parse_chapter_number
+from .base import BaseMangaProvider, MangaSearchResult, ChapterInfo
+from core.comick_meta import get_comick_metadata
 
 class ComickProvider(BaseMangaProvider):
     name = "comick"
-    display_name = "Comick"
-    domains = ["comick.io", "comick.app", "comick.cc", "comick.dev"]
+    display_name = "ComicK (Covers & Catalog)"
+    domains = ["comick.io", "comick.dev", "comick.cc", "comick.app"]
     api_base = "https://api.comick.dev"
 
     def __init__(self):
         super().__init__()
         self.session.headers.update({
-            "Referer": "https://comick.io/",
-            "Origin": "https://comick.io",
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
                 "Chrome/124.0.0.0 Safari/537.36"
-            )
+            ),
+            "Referer": "https://comick.io/",
+            "Accept": "application/json, text/plain, */*",
         })
+        self._pill_provider = None
+        self._dex_provider = None
+
+    def _get_pill(self):
+        if not self._pill_provider:
+            from .mangapill import MangaPillProvider
+            self._pill_provider = MangaPillProvider()
+        return self._pill_provider
+
+    def _get_dex(self):
+        if not self._dex_provider:
+            from .mangadex import MangaDexProvider
+            self._dex_provider = MangaDexProvider()
+        return self._dex_provider
+
+    def can_handle_url(self, url: str) -> bool:
+        lowered = url.lower().strip()
+        return any(d in lowered for d in self.domains)
 
     def parse_url(self, url: str) -> Optional[str]:
-        # Matches https://comick.io/comic/{slug} or comic/{hid}
-        match = re.search(r"comic/([^/?#]+)", url)
-        if match:
-            return match.group(1)
+        # Matches https://comick.io/comic/00-naruto or https://comick.io/comic/naruto
+        m = re.search(r"comic/([^/?#]+)", url)
+        if m:
+            return m.group(1)
         return None
 
     def search(self, query: str, limit: int = 20) -> List[MangaSearchResult]:
         parsed = self.parse_url(query)
-        if parsed:
-            try:
-                return [self.get_manga_details(parsed)]
-            except Exception:
-                pass
+        slug_or_q = parsed if parsed else query.strip()
 
-        url = f"{self.api_base}/v1.0/search"
-        params = {"q": query, "limit": min(limit, 25)}
-        resp = self.session.get(url, params=params, timeout=15)
+        url = f"{self.api_base}/v1.0/search?q={requests.utils.quote(slug_or_q)}"
+        resp = self.session.get(url, timeout=12)
         resp.raise_for_status()
 
         data = resp.json()
         results = []
-        for item in data:
-            hid = item.get("hid")
-            slug = item.get("slug")
-            identifier = slug or hid
-            title = item.get("title") or "Unknown"
+        if isinstance(data, list):
+            for item in data:
+                slug = item.get("slug") or str(item.get("hid"))
+                title = item.get("title") or slug
+                last_chap = item.get("last_chapter")
+                chap_label = f"{last_chap} Chapters" if last_chap else "Ongoing"
 
-            # Cover
-            cover = ""
-            md_covers = item.get("md_covers", [])
-            if md_covers and isinstance(md_covers, list):
-                b2key = md_covers[0].get("b2key")
-                if b2key:
-                    cover = f"https://meo.comick.pictures/{b2key}"
+                cover_b2 = item.get("md_covers", [{}])[0].get("b2key") if item.get("md_covers") else ""
+                cover_url = f"https://meo.comick.pictures/{cover_b2}" if cover_b2 else ""
 
-            desc = item.get("desc") or ""
-            status_num = item.get("status")
-            status_str = "ongoing" if status_num == 1 else "completed" if status_num == 2 else ""
-            last_chap = item.get("last_chapter") or ""
+                desc = item.get("desc") or ""
 
-            results.append(MangaSearchResult(
-                id=identifier,
-                provider=self.name,
-                title=title,
-                cover_url=cover,
-                description=desc[:300] + ("..." if len(desc) > 300 else ""),
-                status=status_str,
-                latest_chapter=str(last_chap) if last_chap else "",
-                url=f"https://comick.io/comic/{identifier}",
-                extra={"hid": hid, "slug": slug},
-            ))
-            if len(results) >= limit:
-                break
+                results.append(MangaSearchResult(
+                    id=slug,
+                    provider=self.name,
+                    title=title,
+                    cover_url=cover_url,
+                    description=desc[:280] + ("..." if len(desc) > 280 else ""),
+                    status="Completed" if item.get("status") == 2 else "Ongoing",
+                    latest_chapter=chap_label,
+                    url=f"https://comick.io/comic/{slug}",
+                    extra={"hid": item.get("hid"), "last_chapter": last_chap},
+                ))
+                if len(results) >= limit:
+                    break
 
         return results
 
     def get_manga_details(self, manga_id: str) -> MangaSearchResult:
         parsed = self.parse_url(manga_id)
-        slug_or_hid = parsed if parsed else manga_id
+        slug = parsed if parsed else manga_id
 
-        url = f"{self.api_base}/comic/{slug_or_hid}"
-        resp = self.session.get(url, timeout=15)
+        url = f"{self.api_base}/comic/{slug}"
+        resp = self.session.get(url, timeout=12)
         resp.raise_for_status()
         data = resp.json()
 
         comic = data.get("comic", {})
-        title = comic.get("title") or slug_or_hid
+        title = comic.get("title") or slug
         desc = comic.get("desc") or ""
-        hid = comic.get("hid") or slug_or_hid
-        slug = comic.get("slug") or slug_or_hid
+        last_chap = comic.get("last_chapter")
+        chap_label = f"{last_chap} Chapters" if last_chap else "Ongoing"
 
-        cover = ""
-        md_covers = comic.get("md_covers", [])
-        if md_covers and isinstance(md_covers, list):
-            b2key = md_covers[0].get("b2key")
-            if b2key:
-                cover = f"https://meo.comick.pictures/{b2key}"
+        cover_b2 = comic.get("md_covers", [{}])[0].get("b2key") if comic.get("md_covers") else ""
+        cover_url = f"https://meo.comick.pictures/{cover_b2}" if cover_b2 else ""
 
         return MangaSearchResult(
-            id=slug_or_hid,
+            id=slug,
             provider=self.name,
             title=title,
-            cover_url=cover,
+            cover_url=cover_url,
             description=desc,
-            status=str(comic.get("status", "")),
-            latest_chapter=str(comic.get("last_chapter", "")),
-            url=f"https://comick.io/comic/{slug_or_hid}",
-            extra={"hid": hid, "slug": slug},
+            status="Completed" if comic.get("status") == 2 else "Ongoing",
+            latest_chapter=chap_label,
+            url=f"https://comick.io/comic/{slug}",
+            extra={"hid": comic.get("hid"), "last_chapter": last_chap},
         )
 
     def get_chapters(self, manga_id: str) -> List[ChapterInfo]:
-        parsed = self.parse_url(manga_id)
-        slug_or_hid = parsed if parsed else manga_id
+        """
+        Resolves chapter downloads through MangaPill (or MangaDex)
+        by matching title/slug cleanly.
+        """
+        details = self.get_manga_details(manga_id)
+        search_title = details.title
 
-        # First get comic details to obtain correct hid
-        hid = slug_or_hid
-        if len(slug_or_hid) != 8: # Comick hid is usually 8 chars
-            try:
-                details = self.get_manga_details(slug_or_hid)
-                hid = details.extra.get("hid") or slug_or_hid
-            except Exception:
-                pass
+        # Try MangaPill first (fastest full back-catalogs)
+        pill = self._get_pill()
+        try:
+            pill_matches = pill.search(search_title, limit=3)
+            if pill_matches:
+                # Find closest title match
+                target_pill = pill_matches[0]
+                for m in pill_matches:
+                    if m.title.lower() == search_title.lower():
+                        target_pill = m
+                        break
+                chapters = pill.get_chapters(target_pill.id)
+                if chapters:
+                    return chapters
+        except Exception as e:
+            print(f"MangaPill chapter resolution failed for {search_title}: {e}")
 
-        all_chapters: List[ChapterInfo] = []
-        page = 1
-        limit = 100
+        # Fallback to MangaDex
+        dex = self._get_dex()
+        try:
+            dex_matches = dex.search(search_title, limit=3)
+            if dex_matches:
+                target_dex = dex_matches[0]
+                for m in dex_matches:
+                    if m.title.lower() == search_title.lower():
+                        target_dex = m
+                        break
+                chapters = dex.get_chapters(target_dex.id)
+                if chapters:
+                    return chapters
+        except Exception as e:
+            print(f"MangaDex chapter resolution failed for {search_title}: {e}")
 
-        while True:
-            url = f"{self.api_base}/comic/{hid}/chapters"
-            params = {"lang": "en", "limit": limit, "page": page}
-            resp = self.session.get(url, params=params, timeout=20)
-            if resp.status_code != 200:
-                break
-            data = resp.json()
-            raw_chaps = data.get("chapters", [])
-            if not raw_chaps:
-                break
-
-            for c in raw_chaps:
-                chap_hid = c.get("hid")
-                chap_num = str(c.get("chap") or "unknown")
-                title = c.get("title") or ""
-                vol = str(c.get("vol") or "")
-                mdid = c.get("mdid")
-
-                all_chapters.append(ChapterInfo(
-                    id=chap_hid,
-                    provider=self.name,
-                    chapter_num=chap_num,
-                    title=title,
-                    volume=vol,
-                    url=f"https://comick.io/comic/{hid}/{chap_hid}",
-                    extra={"mdid": mdid, "external": c.get("external")},
-                ))
-
-            if len(raw_chaps) < limit or page >= 10:
-                break
-            page += 1
-
-        # Deduplicate
-        seen = {}
-        unique_chaps = []
-        for ch in all_chapters:
-            if ch.chapter_num not in seen:
-                seen[ch.chapter_num] = True
-                unique_chaps.append(ch)
-
-        unique_chaps.sort(key=lambda c: parse_chapter_number(c.chapter_num))
-        return unique_chaps
+        return []
 
     def get_page_urls(self, chapter_id: str, extra: Optional[Dict[str, Any]] = None) -> List[str]:
-        # Fetch chapter details
-        url = f"{self.api_base}/chapter/{chapter_id}"
-        resp = self.session.get(url, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
+        # Delegate to MangaPill or MangaDex based on chapter ID format
+        if "-" in chapter_id and "/" in chapter_id:
+            return self._get_pill().get_page_urls(chapter_id, extra)
+        return self._get_dex().get_page_urls(chapter_id, extra)
 
-        chap = data.get("chapter", {})
-        images = chap.get("images") or chap.get("md_images") or []
-        page_urls = []
-
-        for img in images:
-            if isinstance(img, dict):
-                b2key = img.get("b2key")
-                u = img.get("url")
-                if u:
-                    page_urls.append(u)
-                elif b2key:
-                    page_urls.append(f"https://meo.comick.pictures/{b2key}")
-            elif isinstance(img, str):
-                page_urls.append(img)
-
-        # Fallback to MangaDex if chapter is linked via mdid
-        if not page_urls and chap.get("mdid"):
-            mdid = chap.get("mdid")
-            try:
-                server_resp = self.session.get(f"https://api.mangadex.org/at-home/server/{mdid}", timeout=15)
-                if server_resp.status_code == 200:
-                    server = server_resp.json()
-                    base = server["baseUrl"]
-                    h = server["chapter"]["hash"]
-                    page_urls = [f"{base}/data/{h}/{f}" for f in server["chapter"]["data"]]
-            except Exception:
-                pass
-
-        return page_urls
+    def download_image(self, url: str, output_path: str, referer: Optional[str] = None) -> bool:
+        if "mangapill" in url or "readdetectiveconan" in url:
+            return self._get_pill().download_image(url, output_path, referer)
+        return super().download_image(url, output_path, referer)

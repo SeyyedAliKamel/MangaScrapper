@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MangaScrapper Pro</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=2.8">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📖</text></svg>">
 </head>
 <body>
@@ -15,7 +15,10 @@
         </div>
         <nav class="nav-tabs">
             <button class="tab-btn active" data-tab="tab-search">
-                <span>🔍</span> Search & Download
+                <span>📖</span> Manga Search
+            </button>
+            <button class="tab-btn" data-tab="tab-h-search">
+                <span>🔞</span> H-Search (18+)
             </button>
             <button class="tab-btn" data-tab="tab-downloads">
                 <span>⚡</span> Active Downloads
@@ -33,20 +36,25 @@
     </header>
 
     <main>
-        <!-- TAB 1: SEARCH & DOWNLOAD -->
+        <!-- ============================================== -->
+        <!-- TAB 1: MANGA SEARCH & DOWNLOAD -->
+        <!-- ============================================== -->
         <section id="tab-search" class="tab-content active">
             <div class="search-box-card">
                 <form id="search-form">
                     <div class="search-bar-wrap">
-                        <input type="text" id="search-input" class="search-input" placeholder="Search by manga title (e.g. Chainsaw Man, One Piece) or paste a URL..." required autocomplete="off">
+                        <input type="text" id="search-input" class="search-input" placeholder="Search manga by title (e.g. Chainsaw Man, One Piece, Berserk) or paste URL..." required autocomplete="off">
                         <select id="search-provider" class="select-dropdown">
-                            <option value="all">🌐 All Sources</option>
+                            <option value="all">🌐 All Manga Sources</option>
                         </select>
                         <button type="submit" id="search-btn" class="btn-primary">Search</button>
                     </div>
                 </form>
-                <div class="search-hint">
-                    💡 Tip: Paste a direct URL from MangaDex, MangaPill, or Comick to open and download it instantly without typing IDs.
+                <div class="search-hint" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
+                    <span>💡 Sources: MangaDex, MangaPill, MANGA Plus, ComicK. Paste any direct series URL to open chapters immediately.</span>
+                    <button type="button" class="btn-secondary" onclick="switchTab('tab-h-search')" style="border-color:rgba(236,72,153,0.6);color:#f472b6;font-size:0.82rem;padding:0.3rem 0.75rem;">
+                        🔞 Switch to H-Search (CIN & nhentai) →
+                    </button>
                 </div>
             </div>
 
@@ -57,9 +65,14 @@
 
             <!-- Detail & Chapter Selector View -->
             <div id="detail-view" class="detail-view">
-                <div style="margin-bottom: 1.25rem;">
-                    <button id="btn-back-to-results" class="btn-secondary">← Back to search results</button>
+                <!-- Return Bar -->
+                <div class="nav-back-bar">
+                    <button type="button" id="btn-back-to-results" class="btn-back">
+                        <span>←</span> Return to Search Results
+                    </button>
+                    <span style="font-size:0.85rem;color:var(--text-muted);">Manga Overview & Chapter Selection</span>
                 </div>
+
                 <div class="detail-header">
                     <img id="detail-cover" class="detail-cover" src="" alt="Cover">
                     <div class="detail-info">
@@ -97,6 +110,29 @@
                             <span>Auto-clean folder artifacts after combining</span>
                         </label>
                     </div>
+
+                    <!-- Custom Series & File Naming -->
+                    <div style="margin-top:1.25rem; padding-top:1.2rem; border-top:1px solid var(--border-color);">
+                        <div class="options-title" style="margin-bottom:0.75rem;">🏷️ Custom Naming & Archive Title</div>
+                        <div style="display:grid; grid-template-columns: 1fr auto; gap: 1rem; align-items:flex-end;">
+                            <div>
+                                <label for="opt-custom-name" style="display:block; font-size:0.83rem; color:var(--text-muted); margin-bottom:0.4rem;">
+                                    Custom Name (optional — leave empty to use original manga title):
+                                </label>
+                                <input type="text" id="opt-custom-name" class="search-input" style="width:100%; font-size:0.92rem; padding:0.6rem 0.9rem;" placeholder="e.g. Komi-san wa or My Manga Name">
+                            </div>
+                            <div style="padding-bottom:0.4rem;">
+                                <label class="checkbox-label" style="margin:0;">
+                                    <input type="checkbox" id="opt-include-range" checked>
+                                    <span>Append Chapter Range (e.g. Name_Chapter_1-50)</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div id="naming-preview" style="margin-top:0.75rem; font-size:0.82rem; color:var(--text-muted); padding:0.6rem 0.85rem; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid var(--border-color); font-family:var(--font-mono, monospace); display:flex; gap:1.25rem; flex-wrap:wrap;">
+                            <span id="naming-preview-archive" style="color:var(--accent-color); font-weight:600;">📦 Archive: ...</span>
+                            <span id="naming-preview-chapter" style="color:var(--text-color);">📄 Chapter: ...</span>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Selection Toolbar -->
@@ -117,7 +153,10 @@
                 <!-- Chapters List -->
                 <div id="chapters-grid" class="chapters-grid"></div>
 
-                <div style="display:flex; justify-content:flex-end;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <button type="button" id="btn-bottom-back" class="btn-back">
+                        <span>←</span> Back to Search
+                    </button>
                     <button id="btn-start-download" class="btn-primary" style="padding:1rem 2.5rem; font-size:1.05rem;" disabled>
                         🚀 Start Download
                     </button>
@@ -125,22 +164,117 @@
             </div>
         </section>
 
-        <!-- TAB 2: ACTIVE DOWNLOADS -->
+        <!-- ============================================== -->
+        <!-- TAB 2: DEDICATED DOUJIN / H-GALLERIES (CIN & NHENTAI) -->
+        <!-- ============================================== -->
+        <section id="tab-h-search" class="tab-content">
+            <div class="search-box-card" style="border-top:3px solid #ec4899;">
+                <form id="h-search-form">
+                    <div class="search-bar-wrap">
+                        <select id="h-search-provider" class="select-dropdown h-select-dropdown" style="max-width:210px;">
+                            <option value="all">🌐 All H Sources</option>
+                            <option value="cin">CIN (cin.wtf)</option>
+                            <option value="nhentai">nhentai</option>
+                        </select>
+                        <input type="text" id="h-search-input" class="search-input" placeholder="Enter 6-digit ID (e.g. 177013), title, tag, artist, or URL..." required autocomplete="off">
+                        <button type="submit" id="h-search-btn" class="btn-primary" style="background:linear-gradient(135deg, #ec4899 0%, #f43f5e 100%);">
+                            Search Galleries
+                        </button>
+                    </div>
+                </form>
+                <div class="quick-tags-wrap">
+                    <span style="font-size:0.8rem;color:var(--text-muted);display:flex;align-items:center;">Quick filters:</span>
+                    <span class="quick-tag-pill" data-query="language:english">English Only</span>
+                    <span class="quick-tag-pill" data-query="popular">Popular</span>
+                    <span class="quick-tag-pill" data-query="tag:color">Full Color</span>
+                    <span class="quick-tag-pill" data-query="parody:fate grand order">Fate/Grand Order</span>
+                    <span class="quick-tag-pill" data-query="parody:original">Original</span>
+                </div>
+                <div class="search-hint" style="margin-top:0.6rem;">
+                    🔞 Powered by CIN (cin.wtf / cin.blue) & nhentai. Search by title, parody, artist, or paste a 6-digit code or URL directly.
+                </div>
+            </div>
+
+            <!-- H-Results Grid -->
+            <div id="h-results-section">
+                <div id="h-results-grid" class="results-grid"></div>
+            </div>
+
+            <!-- H-Detail View -->
+            <div id="h-detail-view" class="detail-view" style="border-top:3px solid #ec4899;">
+                <!-- Return Bar -->
+                <div class="nav-back-bar">
+                    <button type="button" id="btn-back-to-h-results" class="btn-back">
+                        <span>←</span> Return to Galleries
+                    </button>
+                    <span class="h-accent-badge">18+ GALLERY</span>
+                </div>
+
+                <div class="detail-header">
+                    <img id="h-detail-cover" class="detail-cover" src="" alt="Cover">
+                    <div class="detail-info">
+                        <div id="h-detail-title" class="detail-title" style="font-size:1.4rem;">Gallery Title</div>
+                        <div class="detail-meta-row" style="margin-top:0.6rem;">
+                            <span id="h-detail-provider" class="tag" style="background:linear-gradient(135deg, #ec4899, #f43f5e);color:#fff;font-weight:700;">SOURCE</span>
+                            <span id="h-detail-id" class="tag" style="background:rgba(255,255,255,0.1);color:#fff;font-weight:600;">ID: -</span>
+                            <span id="h-detail-pages" class="tag">0 pages</span>
+                        </div>
+                        <div id="h-detail-tags" class="h-tags-cloud"></div>
+                    </div>
+                </div>
+
+                <div class="export-options-box">
+                    <div style="margin-bottom:1rem;">
+                        <label for="h-custom-name" style="display:block; font-size:0.83rem; color:var(--text-muted); margin-bottom:0.4rem;">
+                            Custom Gallery Title (optional — leave empty for default):
+                        </label>
+                        <input type="text" id="h-custom-name" class="search-input" style="width:100%; font-size:0.92rem; padding:0.6rem 0.9rem;" placeholder="e.g. Clean Gallery Name">
+                    </div>
+                    <div class="options-title">Download Format</div>
+                    <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-top:0.5rem;">
+                        <button type="button" id="btn-h-download-cbz" class="btn-primary">
+                            📦 Download as CBZ (.cbz)
+                        </button>
+                        <button type="button" id="btn-h-download-pdf" class="btn-primary" style="background:linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                            📄 Download as PDF (.pdf)
+                        </button>
+                        <button type="button" id="btn-h-download-both" class="btn-secondary" style="font-weight:600;">
+                            📦+📄 Download Both (CBZ & PDF)
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================== -->
+        <!-- TAB 3: ACTIVE DOWNLOADS -->
+        <!-- ============================================== -->
         <section id="tab-downloads" class="tab-content">
+            <!-- Return Bar -->
+            <div class="nav-back-bar">
+                <button type="button" id="btn-return-from-downloads" class="btn-back">
+                    <span>←</span> Return to Manga Search
+                </button>
+                <button type="button" id="btn-goto-library" class="btn-secondary">
+                    📚 Go to Library & Archives
+                </button>
+            </div>
+
             <div class="progress-card">
                 <div class="progress-header">
                     <div class="status-indicator">
                         <div id="status-indicator-dot" class="status-dot"></div>
                         <span id="status-indicator-text">IDLE</span>
                     </div>
-                    <button id="btn-cancel-download" class="btn-secondary" style="border-color:var(--danger);color:var(--danger);" disabled>
-                        Cancel Job
+                    <button type="button" id="btn-cancel-download" class="btn-danger" disabled>
+                        ⏹ Cancel Download
                     </button>
                 </div>
 
                 <div style="margin-bottom:1.5rem;">
                     <div id="active-manga-title" style="font-size:1.35rem;font-weight:700;">No active task</div>
-                    <div id="active-manga-sub" style="font-size:0.88rem;color:var(--text-muted);margin-top:0.25rem;">Select a manga and chapters to begin downloading</div>
+                    <div id="active-manga-sub" style="font-size:0.88rem;color:var(--text-muted);margin-top:0.25rem;">Select a manga or gallery to begin downloading</div>
+                    <div id="active-manga-stage" style="font-size:0.88rem;color:var(--accent-color);margin-top:0.35rem;font-weight:600;min-height:1.2rem;"></div>
                 </div>
 
                 <!-- Chapters Progress -->
@@ -175,8 +309,18 @@
             </div>
         </section>
 
-        <!-- TAB 3: LIBRARY & ARCHIVES -->
+        <!-- ============================================== -->
+        <!-- TAB 4: LIBRARY & ARCHIVES -->
+        <!-- ============================================== -->
         <section id="tab-library" class="tab-content">
+            <!-- Return Bar -->
+            <div class="nav-back-bar">
+                <button type="button" id="btn-return-library-to-search" class="btn-back">
+                    <span>←</span> Return to Manga Search
+                </button>
+                <button id="btn-refresh-library" class="btn-secondary">🔄 Refresh</button>
+            </div>
+
             <div class="library-stats-row">
                 <div class="stat-card">
                     <div class="stat-label">Combined CBZ Archives</div>
@@ -197,7 +341,6 @@
                     <span style="font-size:0.85rem;color:var(--text-muted);">Output Folder: </span>
                     <strong id="output-dir-path" style="font-size:0.9rem;word-break:break-all;"></strong>
                 </div>
-                <button id="btn-refresh-library" class="btn-secondary">🔄 Refresh</button>
             </div>
 
             <!-- Uncombined Folders Tool -->
@@ -225,14 +368,27 @@
             </div>
         </section>
 
-        <!-- TAB 4: CBZ <-> PDF CONVERTER -->
+        <!-- ============================================== -->
+        <!-- TAB 5: CBZ ⇄ PDF CONVERTER (WITH LIVE PROGRESS & CANCEL) -->
+        <!-- ============================================== -->
         <section id="tab-converter" class="tab-content">
-            <div class="search-box-card" style="max-width:800px;margin-bottom:2rem;">
+            <!-- Return Bar -->
+            <div class="nav-back-bar">
+                <button type="button" id="btn-return-converter-to-search" class="btn-back">
+                    <span>←</span> Return to Manga Search
+                </button>
+                <button type="button" id="btn-goto-library-from-conv" class="btn-secondary">
+                    📚 View in Library
+                </button>
+            </div>
+
+            <div class="search-box-card" style="max-width:850px;margin-bottom:2rem;">
                 <h3 style="font-size:1.3rem;margin-bottom:0.5rem;">CBZ ⇄ PDF Converter</h3>
                 <p style="font-size:0.88rem;color:var(--text-muted);margin-bottom:1.5rem;">
-                    Upload any <strong>.cbz</strong> (Comic Book Zip) to convert it into a readable <strong>.pdf</strong>, or upload a <strong>.pdf</strong> to losslessly unpack its pages into a <strong>.cbz</strong> comic archive.
+                    Upload any <strong>.cbz</strong> (Comic Book Zip) to convert it into a readable <strong>.pdf</strong>, or upload a <strong>.pdf</strong> to losslessly extract all pages into a <strong>.cbz</strong> archive.
                 </p>
 
+                <!-- Drag & Drop Area -->
                 <div id="drop-zone" style="border:2px dashed var(--border-color);border-radius:var(--radius-md);padding:2.5rem 1.5rem;text-align:center;background:var(--bg-card);cursor:pointer;transition:border-color 0.2s;">
                     <div style="font-size:2.5rem;margin-bottom:0.75rem;">📄 ⇄ 📦</div>
                     <div style="font-weight:700;font-size:1.05rem;margin-bottom:0.25rem;">Drag & drop a .cbz or .pdf file here</div>
@@ -241,13 +397,41 @@
                     <button type="button" class="btn-secondary" onclick="document.getElementById('converter-file-input').click()">Browse File</button>
                 </div>
 
-                <div id="conversion-status" style="display:none;margin-top:1.5rem;padding:1rem;border-radius:var(--radius-md);background:var(--bg-input);">
-                    <div id="conversion-msg" style="font-size:0.9rem;display:flex;align-items:center;gap:0.6rem;"></div>
+                <!-- Live Progress Card -->
+                <div id="converter-progress-container" class="converter-progress-box" style="display:none;">
+                    <div class="converter-status-title">
+                        <div>
+                            <span id="conv-file-name" style="font-weight:700;font-size:1rem;">filename.cbz</span>
+                            <span id="conv-target-badge" class="tag" style="margin-left:0.5rem;">TO PDF</span>
+                        </div>
+                        <button type="button" id="btn-cancel-conversion" class="btn-danger" style="padding:0.4rem 0.9rem;font-size:0.82rem;">
+                            ⏹ Cancel Conversion
+                        </button>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="progress-bar-wrap" style="margin-top:0.75rem;margin-bottom:0.75rem;">
+                        <div class="progress-bar-label">
+                            <span id="conv-stage-text">Processing pages...</span>
+                            <span id="conv-percent-text">0%</span>
+                        </div>
+                        <div class="progress-bar-track" style="height:12px;">
+                            <div id="conv-progress-fill" class="progress-bar-fill" style="width:0%;"></div>
+                        </div>
+                    </div>
+
+                    <div style="display:flex;justify-content:flex-end;margin-top:1rem;">
+                        <a id="btn-download-converted" class="btn-primary" style="display:none;padding:0.75rem 1.5rem;" download>
+                            ⬇ Download Converted File
+                        </a>
+                    </div>
                 </div>
             </div>
         </section>
 
-        <!-- TAB 5: SETTINGS -->
+        <!-- ============================================== -->
+        <!-- TAB 6: SETTINGS -->
+        <!-- ============================================== -->
         <section id="tab-settings" class="tab-content">
             <div class="search-box-card" style="max-width:700px;">
                 <h3 style="font-size:1.2rem;margin-bottom:1.25rem;">Application Settings</h3>
@@ -262,6 +446,6 @@
         </section>
     </main>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=2.8"></script>
 </body>
 </html>

@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# ==========================================
+# MangaScrapper Output & Archive Files
+# ==========================================
+manga_download/
+output/
+outputs/
+*.cbz
+*.pdf
+*.tmp
+temp_*/
+upload_conv_*/
+cbz2pdf_*/
+pdf2cbz_*/

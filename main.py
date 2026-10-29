@@ -1,4 +1,5 @@
 import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
 import sys
 import argparse
 import webbrowser
@@ -7,7 +8,14 @@ import time
 import uvicorn
 
 import config
-from providers import get_provider, search_providers, resolve_manga
+from providers import (
+    get_provider,
+    search_providers,
+    search_manga_providers,
+    search_h_providers,
+    resolve_manga,
+    resolve_h_gallery,
+)
 from core.downloader import download_manager
 from core.exporter import save_chapter_as_pdf, save_chapter_as_cbz, combine_chapters_into_cbz
 from core.converter import cbz_to_pdf, pdf_to_cbz
@@ -89,7 +97,7 @@ def main():
     parser.add_argument("--web", action="store_true", help="Launch the Web UI dashboard (default)")
     parser.add_argument("--cli", action="store_true", help="Run in command-line mode")
     parser.add_argument("--query", "-q", type=str, help="Manga title, keyword, or URL to download in CLI mode")
-    parser.add_argument("--provider", "-p", type=str, default="mangadex", help="Provider (mangadex, mangapill, comick, all)")
+    parser.add_argument("--provider", "-p", type=str, default="mangadex", help="Provider (mangadex, mangapill, mangaplus, all)")
     parser.add_argument("--id", type=str, help="Manga ID or URL")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Web UI host")
     parser.add_argument("--port", type=int, default=8000, help="Web UI port")

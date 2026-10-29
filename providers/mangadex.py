@@ -2,6 +2,7 @@ import re
 import requests
 from typing import List, Optional, Dict, Any
 from .base import BaseMangaProvider, MangaSearchResult, ChapterInfo, parse_chapter_number
+from core.comick_meta import get_comick_metadata
 
 class MangaDexProvider(BaseMangaProvider):
     name = "mangadex"
@@ -24,7 +25,8 @@ class MangaDexProvider(BaseMangaProvider):
             if rel.get("type") == "cover_art":
                 filename = rel.get("attributes", {}).get("fileName")
                 if filename:
-                    return f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+                    raw_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+                    return f"/api/proxy/image?url={requests.utils.quote(raw_url)}"
         return ""
 
     def _extract_title(self, attributes: Dict[str, Any]) -> str:
@@ -71,13 +73,21 @@ class MangaDexProvider(BaseMangaProvider):
             title = self._extract_title(attrs)
             cover = self._extract_cover_url(m_id, item.get("relationships", []))
             
+            # Enrich with Comick cover if available
+            meta = get_comick_metadata(title) if title else None
+            if meta and meta.get("cover_url"):
+                cover = meta["cover_url"]
+
             desc_dict = attrs.get("description", {})
             desc = desc_dict.get("en", "") if isinstance(desc_dict, dict) else ""
             if not desc and isinstance(desc_dict, dict) and desc_dict:
                 desc = next(iter(desc_dict.values()), "")
+            if not desc and meta:
+                desc = meta.get("desc") or ""
+            desc = str(desc or "")
 
-            status = attrs.get("status", "")
-            last_chap = attrs.get("lastChapter", "") or ""
+            status = attrs.get("status", "") or (meta.get("status") if meta else "")
+            last_chap = attrs.get("lastChapter", "") or (f"{meta['last_chapter']} Chapters" if (meta and meta.get("last_chapter")) else "")
 
             results.append(MangaSearchResult(
                 id=m_id,
@@ -104,13 +114,22 @@ class MangaDexProvider(BaseMangaProvider):
         attrs = item.get("attributes", {})
         title = self._extract_title(attrs)
         cover = self._extract_cover_url(actual_id, item.get("relationships", []))
+
+        # Enrich with Comick metadata & cover
+        meta = get_comick_metadata(title) if title else None
+        if meta and meta.get("cover_url"):
+            cover = meta["cover_url"]
+
         desc_dict = attrs.get("description", {})
         desc = desc_dict.get("en", "") if isinstance(desc_dict, dict) else ""
         if not desc and isinstance(desc_dict, dict) and desc_dict:
             desc = next(iter(desc_dict.values()), "")
+        if not desc and meta:
+            desc = meta.get("desc") or ""
+        desc = str(desc or "")
 
-        status = attrs.get("status", "")
-        last_chap = attrs.get("lastChapter", "") or ""
+        status = attrs.get("status", "") or (meta.get("status") if meta else "")
+        last_chap = attrs.get("lastChapter", "") or (f"{meta['last_chapter']} Chapters" if (meta and meta.get("last_chapter")) else "")
 
         return MangaSearchResult(
             id=actual_id,

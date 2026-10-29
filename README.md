@@ -14,20 +14,27 @@ A modern, high-speed multi-source manga downloader, reader, and archiver with a 
 2. **🌐 Multi-Source Manga Engine**
    - **MangaDex**: Official API integration, English & multi-language feed, automatic preferred scanlation selection.
    - **MangaPill**: High-speed CDN mirror with full chapter archives and high-resolution images.
-   - **Comick**: Multi-source aggregator support and fast metadata search.
-   - **nhentai (18+)**: Official V2 API integration, full gallery search, 6-digit ID resolution, and direct URL support.
+   - **MANGA Plus**: Official Shueisha platform API with real-time simulpubs (first 3 & latest chapters of *One Piece*, *Jujutsu Kaisen*, *Chainsaw Man*, *Oshi no Ko*, *Boruto*, *Dandadan*, etc.) featuring automatic 16-byte XOR image descrambling.
+   - **ComicK**: Rich metadata index, exact total chapter counts, and official high-definition unblocked cover art (`meo.comick.pictures`) with automatic chapter download delegation.
    - Extensible provider architecture to easily plug in new scrapers.
 
-3. **🔄 CBZ ⇄ PDF Converter (Bidirectional)**
+3. **🔞 Dedicated Doujin / H-Gallery Tab (CIN & nhentai)**
+   - Complete separation from regular manga search with dark ambient aura animation.
+   - **CIN (`cin.wtf` / `cin.blue`)**: Next.js backend integration with high-speed mirror CDNs and automatic fallback.
+   - **nhentai**: Official v2 REST API integration.
+   - Quick 6-digit ID resolution (e.g. `177013`), title & tag search, and 1-click gallery downloads to CBZ or PDF.
+
+4. **🔄 CBZ ⇄ PDF Converter (with Live Progress & Cancel)**
    - Convert **CBZ to PDF**: Unpacks images with natural page ordering and losslessly binds into PDF documents using `img2pdf`.
-   - Convert **PDF to CBZ**: Extracts embedded raster page images with `pikepdf` and packages into a `.cbz` comic archive.
+   - Convert **PDF to CBZ**: High-speed, robust page rendering using `pypdfium2` and packages into a `.cbz` comic archive.
+   - Real-time animated progress bar with percentage, page count indicator, and instant cancellation.
    - Available via Drag & Drop in the Web UI, 1-click in the Library tab, or directly via CLI (`--convert`).
 
-4. **🔍 Universal Search & Direct URL Resolution (No manual IDs required!)**
-   - Search by title or keyword across all providers in parallel.
-   - Or paste any direct manga or chapter URL (from MangaDex, MangaPill, Comick) to open and download it immediately.
+5. **🔍 Universal Search & Direct URL Resolution (No manual IDs required!)**
+   - Search by title or keyword across manga providers in parallel.
+   - Or paste any direct manga or chapter URL (from MangaDex, MangaPill) to open and download it immediately.
 
-4. **📦 Flexible Export & Archiving**
+6. **📦 Flexible Export & Archiving**
    - Per-chapter **CBZ** (`Chapter_1.cbz`)
    - Per-chapter **PDF** (`Chapter_1.pdf`)
    - **Combined Manga Archive** (`MangaName_Chapter_1-100.cbz`)
